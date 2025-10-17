@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:latest
+    container_name: proyecto_practicas2025
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-practicas2025}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-practicas2025}
+      POSTGRES_DB: ${POSTGRES_DB:-DBpracticas}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  django:
+    build: ./Backend
+    container_name: django_app
+    restart: unless-stopped
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_USER=${POSTGRES_USER:-practicas2025}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-practicas2025}
+      - POSTGRES_DB=${POSTGRES_DB:-DBpracticas}
+      - POSTGRES_PORT=5432
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./Backend/Interfaz:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py runserver 0.0.0.0:8000"
+
+volumes:
+  postgres_data:

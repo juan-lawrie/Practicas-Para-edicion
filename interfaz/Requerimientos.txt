@@ -1,0 +1,70 @@
+
+Importante Realizar esto primero‼️ 
+# Versión de Python requerida
+Python 3.11 o superior
+1. Instalar Python desde python.org
+Instalar Node.js (versión 18 o superior)
+
+
+Esto Segundo❗️❗️☞ Crear un entorno virtual de python con pipenv en la carpeta de Backend: 
+Primero instalar pipenv: pip install pipenv
+Y luego crea el entorno virtual: pipenv install.
+Activar entorno virtual: pipenv shell 
+
+asgiref                       3.9.1
+Django                        5.2.6
+django-cors-headers           4.7.0
+djangorestframework           3.16.1
+djangorestframework_simplejwt 5.5.1
+pillow                        11.3.0
+pip                           25.2
+psycopg2-binary               2.9.10
+PyJWT                         2.10.1
+python-dotenv                 1.1.1
+sqlparse                      0.5.3
+
+
+
+
+
+Crear un contenedor en docker que se llame proyecto_practicas2025
+
+# Configuración de variables de entorno:
+Crear archivo .env en Backend/Interfaz/ con:
+DATABASE_URL=postgresql://usuario:password@localhost:5432/nombre_db
+SECRET_KEY=tu_secret_key_aqui
+
+# Base de datos con Docker :
+docker-compose up -d
+
+# Frontend:
+cd Frontend/interfaz
+npm install
+npm start
+
+
+
+#Comandos Django
+-Hacer migraciones: python manage.py makemigrations
+- Ejecutar migraciones: python manage.py migrate (o tambien puede ser python3 manage.py migrate)
+- Crear superusuario: python manage.py createsuperuser(o tambien puede ser python3 manage.py createsuperuser)
+- Ejecutar servidor: python manage.py runserver (o tambien puede ser  python3 manage.py runserver)
+
+Asignar role al superusuario en django:
+
+from api.models import User, Role
+superuser = User.objects.get(username='NOMBRE_DEL_SUPERUSUARIO')
+gerente_role = Role.objects.get(name='Gerente')  # Ajusta el campo si es diferente
+superuser.role = gerente_role
+superuser.save()
+
+Verificar que se asigno correctamente el rol:
+
+from api.models import User
+superuser = User.objects.get(is_superuser=True)
+print(superuser.username, superuser.role)
+
+#Comandos Docker
+
+- Ver logs de Docker: docker-compose logs
+- Parar contenedores: docker-compose down

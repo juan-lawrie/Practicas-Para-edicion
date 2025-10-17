@@ -1,0 +1,42 @@
+
+
+# ===== PYTHON/DJANGO ESPECÍFICO =====
+
+# Variables de entorno (CRÍTICO)
+.env
+.env.local
+.env.production
+
+# Base de datos local (IMPORTANTE - NO SUBIR DATOS)
+db.sqlite3
+*.db
+
+# Archivos compilados Python (NO IMPORTANTES - SE GENERAN AUTO)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Django (IMPORTANTES - ARCHIVOS PESADOS O SENSIBLES)
+*.log
+
+
+# Migraciones locales (CUIDADO - MEJOR INCLUIR)
+# migrations/
+
+# Testing y cobertura (NO IMPORTANTES)
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.pytest_cache/
+
+# IDEs (OPCIONALES)
+.idea/
+.vscode/
+
+# Entornos virtuales (IMPORTANTES - PESADOS)
+venv/
+env/
+ENV/
