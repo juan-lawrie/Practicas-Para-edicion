@@ -57,9 +57,16 @@ class Product(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
     price = models.DecimalField(max_digits=10, decimal_places=2)
-    stock = models.IntegerField(default=0)
+    stock = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     low_stock_threshold = models.IntegerField(default=10) # Umbral para la alerta de stock
     category = models.CharField(max_length=50, default='Producto') # Categoría del producto
+    is_ingredient = models.BooleanField(default=False)
+    UNIT_CHOICES = (
+        ('g', 'Gramos'),
+        ('ml', 'Mililitros'),
+        ('unidades', 'Unidades'),
+    )
+    unit = models.CharField(max_length=10, choices=UNIT_CHOICES, default='unidades')
 
     def __str__(self):
         return self.name
@@ -85,7 +92,7 @@ class InventoryChange(models.Model):
     )
     type = models.CharField(max_length=10, choices=CHANGE_CHOICES)
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
-    quantity = models.IntegerField()
+    quantity = models.DecimalField(max_digits=10, decimal_places=2)
     reason = models.TextField(blank=True, null=True)
     timestamp = models.DateTimeField(auto_now_add=True)
     user = models.ForeignKey('User', on_delete=models.SET_NULL, null=True)
@@ -100,9 +107,9 @@ class InventoryChangeAudit(models.Model):
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     role = models.CharField(max_length=50, blank=True, null=True)
     change_type = models.CharField(max_length=10, choices=InventoryChange.CHANGE_CHOICES)
-    quantity = models.PositiveIntegerField()
-    previous_stock = models.IntegerField()
-    new_stock = models.IntegerField()
+    quantity = models.DecimalField(max_digits=10, decimal_places=2)
+    previous_stock = models.DecimalField(max_digits=10, decimal_places=2)
+    new_stock = models.DecimalField(max_digits=10, decimal_places=2)
     reason = models.TextField(blank=True, null=True)
     timestamp = models.DateTimeField(auto_now_add=True)
 
@@ -213,3 +220,18 @@ class LowStockReport(models.Model):
 
     def __str__(self):
         return f"Report for {self.product.name} by {self.reported_by.username}"
+
+
+class RecipeIngredient(models.Model):
+    product = models.ForeignKey(Product, related_name='recipe', on_delete=models.CASCADE)
+    ingredient = models.ForeignKey(Product, on_delete=models.CASCADE, limit_choices_to={'is_ingredient': True})
+    quantity = models.DecimalField(max_digits=10, decimal_places=2)
+    UNIT_CHOICES = (
+        ('g', 'Gramos'),
+        ('ml', 'Mililitros'),
+        ('unidades', 'Unidades'),
+    )
+    unit = models.CharField(max_length=10, choices=UNIT_CHOICES, default='g')
+
+    def __str__(self):
+        return f"{self.quantity} {self.unit} of {self.ingredient.name} for {self.product.name}"

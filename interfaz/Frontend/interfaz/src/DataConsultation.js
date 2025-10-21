@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { api } from './services/api';
 
 // DataConsultation: componente extracto para evitar remounts por cambios en App
 // Recibe como props los estados y funciones que necesita para no depender de clausuras
@@ -94,13 +95,21 @@ export default function DataConsultation(props) {
     const parseAnyDate = (dateStr) => {
         if (!dateStr) return null;
         if (dateStr instanceof Date) return dateStr;
-        if (typeof dateStr === 'string' && dateStr.includes('/')) {
-            const [day, month, year] = dateStr.split('/');
+
+        // Handle YYYY-MM-DD from date picker to avoid timezone issues
+        if (typeof dateStr === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+            const [year, month, day] = dateStr.split('-').map(Number);
+            // Creates date at 00:00:00 in the local timezone
             return new Date(year, month - 1, day);
         }
-        if (typeof dateStr === 'string' && dateStr.includes('-')) {
-            return new Date(dateStr);
+
+        // Handle DD/MM/YYYY
+        if (typeof dateStr === 'string' && /^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
+            const [day, month, year] = dateStr.split('/').map(Number);
+            return new Date(year, month - 1, day);
         }
+
+        // Handle full ISO strings from backend (or other formats)
         const parsed = new Date(dateStr);
         return isNaN(parsed.getTime()) ? null : parsed;
     };
@@ -112,18 +121,27 @@ export default function DataConsultation(props) {
     };
 
     const executeStockQuery = async () => {
+        if (!startDate || !endDate) {
+            setMessage('Por favor, ingrese una fecha de inicio y una de fin.');
+            return; // Detiene la ejecución si faltan fechas
+    }
         const lowStockItems = inventory.filter(item => item.stock < 10);
         const results = {
             title: 'Estado del Stock',
             summary: { totalProducts: inventory.length, lowStockItems: lowStockItems.length, totalStock: inventory.reduce((s,i)=>s+(i.stock||0),0) },
-            data: inventory.map(item => ({ name: item.name, stock: item.stock, type: item.type, price: item.price, status: item.stock < 10 ? 'Stock Bajo' : item.stock < 20 ? 'Stock Medio' : 'Stock Alto' }))
+            data: inventory.map(item => ({ id: item.id, name: item.name, stock: item.stock, type: item.type, price: item.price, status: item.stock < 10 ? 'Stock Bajo' : item.stock < 20 ? 'Stock Medio' : 'Stock Alto' }))
         };
         return results;
     };
 
-    const executeSuppliersQuery = async () => ({ title: 'Información de Proveedores', summary: { totalSuppliers: suppliers.length, activeSuppliers: suppliers.length }, data: suppliers.map(s=>({ name: s.name, cuit: s.cuit, phone: s.phone, address: s.address, products: s.products })) });
+    const executeSuppliersQuery = async () => ({ title: 'Información de Proveedores', summary: { totalSuppliers: suppliers.length, activeSuppliers: suppliers.length }, data: suppliers.map(s=>({ id: s.id, name: s.name, cuit: s.cuit, phone: s.phone, address: s.address, products: s.products })) });
 
     const executeSalesQuery = async () => {
+        if (!startDate || !endDate) {
+        setMessage('Por favor, ingrese una fecha de inicio y una de fin.');
+        return; // Detiene la ejecución si faltan fechas
+    }
+
         let allSales = Array.isArray(sales) ? sales : [];
         if ((!Array.isArray(allSales) || allSales.length === 0)) {
             try { const loaded = await loadSales(); allSales = Array.isArray(loaded) && loaded.length > 0 ? loaded : (Array.isArray(sales) ? sales : []); } catch (e) { console.debug('⚠️ No se pudieron cargar ventas desde backend en executeSalesQuery:', e && e.message); allSales = Array.isArray(sales) ? sales : []; }
@@ -155,6 +173,9 @@ export default function DataConsultation(props) {
                 const saleDate = parseAnyDate(sale.date) || null;
                 const start = parseAnyDate(startDate);
                 const end = parseAnyDate(endDate);
+                if (end) {
+                    end.setHours(23, 59, 59, 999);
+                }
                 if (!saleDate || !start || !end) return false;
                 return saleDate >= start && saleDate <= end;
             }
@@ -165,6 +186,11 @@ export default function DataConsultation(props) {
     };
 
     const executePurchasesQuery = async () => {
+        if (!startDate || !endDate) {
+        setMessage('Por favor, ingrese una fecha de inicio y una de fin.');
+        return; // Detiene la ejecución si faltan fechas
+    }
+
         const filteredPurchases = purchases.filter(purchase => {
             if (startDate && endDate) {
                 const purchaseDate = parseAnyDate(purchase.date);
@@ -190,6 +216,12 @@ export default function DataConsultation(props) {
     };
 
     const executeOrdersQuery = async () => {
+
+        if (!startDate || !endDate) {
+        setMessage('Por favor, ingrese una fecha de inicio y una de fin.');
+        return; // Detiene la ejecución si faltan fechas
+    }
+
         const filteredOrders = orders.filter(order => {
             if (startDate && endDate) {
                 const orderDate = parseAnyDate(order.date);
@@ -197,15 +229,21 @@ export default function DataConsultation(props) {
                 const end = parseAnyDate(endDate);
                 if (!orderDate || !start || !end) return false;
                 return orderDate >= start && orderDate <= end;
+            
             }
             return true;
+            
         });
         const results = { title: 'Reporte de Pedidos', summary: { totalOrders: filteredOrders.length, pendingOrders: filteredOrders.filter(o => o.status === 'Pendiente').length, sentOrders: filteredOrders.filter(o => o.status === 'Enviado').length, period: startDate && endDate ? `${formatDateForDisplay(startDate)} - ${formatDateForDisplay(endDate)}` : 'Todos los períodos' }, data: filteredOrders.map(order => { const itemsArray = Array.isArray(order.items) ? order.items : []; const productsList = itemsArray.map(it => it.productName || it.product_name || it.product || '').filter(Boolean); const unitsList = itemsArray.map(it => (it.quantity !== undefined && it.quantity !== null) ? String(it.quantity) : '').filter(Boolean); return { id: order.id, date: order.date, customerName: order.customerName || order.customer_name || '', paymentMethod: order.paymentMethod || order.payment_method || '', status: order.status, items: itemsArray, products: productsList.join(', '), units: unitsList.join(', '), customer_name: order.customerName || order.customer_name || '', payment_method: order.paymentMethod || order.payment_method || '' }; }) };
         setQueryResults(results);
         return results;
+        
     };
 
     const executeCashMovementsQuery = async () => {
+
+        
+        
         let movementsToProcess = cashMovements;
         if (!movementsToProcess || movementsToProcess.length === 0) {
             try {
@@ -233,10 +271,18 @@ export default function DataConsultation(props) {
                 const movementDate = parseAnyDate(movement.date);
                 const start = parseAnyDate(startDate);
                 const end = parseAnyDate(endDate);
+
+                if (end) {
+                    end.setHours(23, 59, 59, 999);
+                }
+
                 if (!movementDate || !start || !end) return false;
                 return movementDate >= start && movementDate <= end;
             }
-            return true;
+            if (!startDate || !endDate) {
+                setMessage('Por favor, ingrese una fecha de inicio y una de fin.');
+                return; // Detiene la ejecución si faltan fechas
+        }
         });
 
         const totalIncome = filteredMovements.reduce((sum, m) => sum + (m.type === 'Entrada' ? m.amount : 0), 0);

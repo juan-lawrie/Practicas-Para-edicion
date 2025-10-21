@@ -7,16 +7,18 @@ from rest_framework.permissions import SAFE_METHODS, BasePermission
 from django.shortcuts import get_object_or_404
 from django.contrib.auth import get_user_model, authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
-from .models import Product, CashMovement, InventoryChange, Sale, UserQuery, Supplier, Role, LowStockReport
+from .models import Product, CashMovement, InventoryChange, Sale, UserQuery, Supplier, Role, LowStockReport, RecipeIngredient
 from django.conf import settings
 from django.utils import timezone
 from .serializers import (
     UserSerializer, UserCreateSerializer, ProductSerializer,
     CashMovementSerializer, InventoryChangeSerializer, SaleSerializer,
     UserQuerySerializer, SupplierSerializer, UserStorageSerializer, RoleSerializer, UserUpdateSerializer,
-    LowStockReportSerializer, InventoryChangeAuditSerializer
+    LowStockReportSerializer, InventoryChangeAuditSerializer, RecipeIngredientSerializer
 )
 from .models import UserStorage
+from django.db import transaction
+from decimal import Decimal
 
 # Permiso personalizado para rol de Gerente
 class IsGerente(BasePermission):
@@ -396,6 +398,19 @@ class ProductViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
 
+class RecipeIngredientViewSet(viewsets.ModelViewSet):
+    serializer_class = RecipeIngredientSerializer
+    queryset = RecipeIngredient.objects.all()
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        product_id = self.request.query_params.get('product_id')
+        if product_id:
+            queryset = queryset.filter(product_id=product_id)
+        return queryset
+
+
 class IsEncargado(BasePermission):
     """
     Permiso personalizado para permitir acceso solo a usuarios con el rol 'Encargado'.
@@ -453,7 +468,7 @@ class PurchaseViewSet(viewsets.ModelViewSet):
         if items and isinstance(items, list):
             for item in items:
                 qty = item.get('quantity', 0)
-                price = item.get('price', 0)
+                price = item.get('unitPrice', 0)
                 computed_total += Decimal(str(qty)) * Decimal(str(price))
 
         final_total = serializer.validated_data.get('total_amount') or self.request.data.get('total_amount') or computed_total
@@ -486,15 +501,70 @@ class PurchaseViewSet(viewsets.ModelViewSet):
                 if is_manager and isinstance(purchase.items, list):
                     for item in purchase.items:
                         product_id = item.get('product_id')
-                        quantity = item.get('quantity')
-                        if product_id and quantity:
+                        product_name = item.get('productName')
+                        try:
+                            quantity = Decimal(str(item.get('quantity', '0')))
+                            unit_price = Decimal(str(item.get('unitPrice', '0')))
+                        except:
+                            continue
+                        
+                        purchase_unit = item.get('unit', '').lower()
+
+                        if quantity <= 0:
+                            continue
+
+                        product = None
+                        if product_id:
                             try:
                                 product = Product.objects.select_for_update().get(id=product_id)
-                                product.stock += quantity
-                                product.save()
                             except Product.DoesNotExist:
-                                # This will roll back the transaction
                                 raise Exception(f"El producto con ID {product_id} no fue encontrado.")
+                        elif product_name:
+                            base_unit_for_new_product = 'u'
+                            if purchase_unit in ['kg', 'g']:
+                                base_unit_for_new_product = 'g'
+                            elif purchase_unit in ['l', 'ml']:
+                                base_unit_for_new_product = 'ml'
+
+                            product, created = Product.objects.select_for_update().get_or_create(
+                                name=product_name,
+                                defaults={
+                                    'price': unit_price,
+                                    'stock': 0,
+                                    'category': 'Insumo',
+                                    'unit': base_unit_for_new_product,
+                                    'is_ingredient': True
+                                }
+                            )
+                        
+                        if not product:
+                            continue
+
+                        if not purchase_unit:
+                            purchase_unit = product.unit.lower()
+
+                        base_quantity = quantity
+                        product_base_unit = product.unit.lower()
+
+                        # Conversión de unidades de compra a unidad base del producto
+                        if product_base_unit == 'g':
+                            if purchase_unit == 'kg':
+                                base_quantity = quantity * 1000
+                            elif purchase_unit != 'g':
+                                raise ValueError(f"Unidad de compra '{purchase_unit}' inválida para el producto '{product.name}' (unidad base: 'g').")
+                        elif product_base_unit == 'ml':
+                            if purchase_unit == 'l':
+                                base_quantity = quantity * 1000
+                            elif purchase_unit != 'ml':
+                                raise ValueError(f"Unidad de compra '{purchase_unit}' inválida para el producto '{product.name}' (unidad base: 'ml').")
+                        elif product_base_unit == 'u':
+                            if purchase_unit != 'u':
+                                raise ValueError(f"Unidad de compra '{purchase_unit}' inválida para el producto '{product.name}' (unidad base: 'u').")
+                        elif purchase_unit != product_base_unit:
+                                raise ValueError(f"No se puede convertir de '{purchase_unit}' a '{product_base_unit}' para el producto '{product.name}'.")
+
+                        product.stock += base_quantity
+                        product.save()
         except Exception as e:
             raise e
 
@@ -555,18 +625,76 @@ class PurchaseViewSet(viewsets.ModelViewSet):
                     for item in purchase.items:
                         try:
                             product_id = item.get('product_id') or item.get('productId')
-                            if not product_id:
-                                logger.error(f"No product_id found in item: {item}")
-                                raise Exception(f"No product_id found in item: {item}")
+                            product_name = item.get('productName')
+                            try:
+                                quantity = Decimal(str(item.get('quantity', '0')))
+                                unit_price = Decimal(str(item.get('unitPrice', '0')))
+                            except:
+                                logger.warning(f"Invalid quantity or price for item {item} in purchase {purchase.id}. Skipping.")
+                                continue
                             
-                            product = Product.objects.get(id=product_id)
-                            quantity = item.get('quantity', 0)
-                            product.stock += quantity
+                            purchase_unit = item.get('unit', '').lower()
+
+                            if quantity <= 0:
+                                continue
+
+                            product = None
+                            if product_id:
+                                product = Product.objects.select_for_update().get(id=product_id)
+                            elif product_name:
+                                base_unit_for_new_product = 'u'
+                                if purchase_unit in ['kg', 'g']:
+                                    base_unit_for_new_product = 'g'
+                                elif purchase_unit in ['l', 'ml']:
+                                    base_unit_for_new_product = 'ml'
+
+                                product, created = Product.objects.select_for_update().get_or_create(
+                                    name=product_name,
+                                    defaults={
+                                        'price': unit_price,
+                                        'stock': 0,
+                                        'category': 'Insumo',
+                                        'unit': base_unit_for_new_product,
+                                        'is_ingredient': True
+                                    }
+                                )
+                            
+                            if not product:
+                                continue
+
+                            if not purchase_unit:
+                                purchase_unit = product.unit.lower()
+
+                            base_quantity = quantity
+                            product_base_unit = product.unit.lower()
+
+                            # Conversión de unidades de compra a unidad base del producto
+                            if product_base_unit == 'g':
+                                if purchase_unit == 'kg':
+                                    base_quantity = quantity * 1000
+                                elif purchase_unit != 'g':
+                                    raise ValueError(f"Unidad de compra '{purchase_unit}' inválida para el producto '{product.name}' (unidad base: 'g').")
+                            elif product_base_unit == 'ml':
+                                if purchase_unit == 'l':
+                                    base_quantity = quantity * 1000
+                                elif purchase_unit != 'ml':
+                                    raise ValueError(f"Unidad de compra '{purchase_unit}' inválida para el producto '{product.name}' (unidad base: 'ml').")
+                            elif product_base_unit == 'u':
+                                if purchase_unit != 'u':
+                                    raise ValueError(f"Unidad de compra '{purchase_unit}' inválida para el producto '{product.name}' (unidad base: 'u').")
+                            elif purchase_unit != product_base_unit:
+                                    raise ValueError(f"No se puede convertir de '{purchase_unit}' a '{product_base_unit}' para el producto '{product.name}'.")
+
+                            product.stock += base_quantity
                             product.save()
-                            logger.info(f"Updated product {product.id} stock: +{quantity}, new stock: {product.stock}")
+                            logger.info(f"Updated product {product.id} stock: +{base_quantity} ({quantity} {purchase_unit}), new stock: {product.stock}")
+                        
                         except Product.DoesNotExist:
-                            logger.error(f"Product with id {product_id} not found during approval of purchase {purchase.id}.")
-                            raise Exception(f"Product with id {product_id} not found during approval.")
+                            logger.error(f"Product with id {item.get('product_id')} not found during approval of purchase {purchase.id}.")
+                            raise Exception(f"Product with id {item.get('product_id')} not found during approval.")
+                        except ValueError as e:
+                            logger.error(f"Error processing item {item} in purchase {purchase.id}: {str(e)}")
+                            raise e
 
                 purchase.status = 'Aprobada'
                 purchase.approved_by = request.user
@@ -646,6 +774,8 @@ class InventoryChangeViewSet(viewsets.ModelViewSet):
         quantity = serializer.validated_data['quantity']
         change_type = serializer.validated_data['type']
 
+        
+
         # Enforce server-side permission: solo usuarios con role 'Gerente' pueden crear cambios
         role_name = None
         try:
@@ -660,11 +790,18 @@ class InventoryChangeViewSet(viewsets.ModelViewSet):
         with transaction.atomic():
             # Lock the product row to avoid race conditions
             p = Product.objects.select_for_update().get(pk=product.pk)
+            
             previous_stock = p.stock
 
             if change_type == 'Entrada':
                 new_stock = previous_stock + quantity
             else:  # Salida
+               
+                # Validar que la cantidad sea un número entero si el producto no es un insumo
+                if not p.is_ingredient and quantity % 1 != 0:
+                        from rest_framework.exceptions import ValidationError
+                        raise ValidationError({'detail': 'La cantidad para productos no insumos debe ser un número entero.'})
+
                 if previous_stock < quantity:
                     from rest_framework.exceptions import ValidationError
                     raise ValidationError({'detail': 'La salida supera el stock disponible.'})

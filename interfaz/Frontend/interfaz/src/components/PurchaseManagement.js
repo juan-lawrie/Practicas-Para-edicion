@@ -4,7 +4,7 @@ import api from '../services/api';
 import PurchaseRequests from './PurchaseRequests';
 import PurchaseHistory from './PurchaseHistory';
 
-const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products = [], purchases = [], reloadPurchases }) => {
+const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products = [], purchases = [], reloadPurchases, reloadProducts }) => {
     const [pendingPurchases, setPendingPurchases] = useState([]);
     const [purchaseHistory, setPurchaseHistory] = useState([]);
     const [view, setView] = useState('requests'); // 'requests', 'history', or 'create'
@@ -14,7 +14,7 @@ const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products
     const [newPurchase, setNewPurchase] = useState({
         date: '',
         supplierId: '',
-        items: [{ productName: '', quantity: 1, unitPrice: 0, total: 0 }]
+        items: [{ productName: '', quantity: 1, unit: 'u', unitPrice: 0, total: 0 }]
     });
 
     const productOptions = inventory.map(product => ({
@@ -63,7 +63,7 @@ const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products
     const addItem = () => {
         setNewPurchase({
             ...newPurchase,
-            items: [...newPurchase.items, { productName: '', quantity: 1, unitPrice: 0, total: 0 }]
+            items: [...newPurchase.items, { productName: '', quantity: 1, unit: 'u', unitPrice: 0, total: 0 }]
         });
     };
 
@@ -79,14 +79,22 @@ const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products
     const updateItem = (index, field, value) => {
         const updatedItems = [...newPurchase.items];
         updatedItems[index] = { ...updatedItems[index], [field]: value };
-        
+
+        if (field === 'productName') {
+            const product = inventory.find(p => p.name === value);
+            if (product) {
+                updatedItems[index].unitPrice = product.price;
+                updatedItems[index].unit = product.unit || 'u';
+            }
+        }
+
         // Recalcular el total del item
-        if (field === 'quantity' || field === 'unitPrice') {
-            const quantity = field === 'quantity' ? value : updatedItems[index].quantity;
-            const unitPrice = field === 'unitPrice' ? value : updatedItems[index].unitPrice;
+        if (field === 'quantity' || field === 'unitPrice' || field === 'productName') {
+            const quantity = updatedItems[index].quantity;
+            const unitPrice = updatedItems[index].unitPrice;
             updatedItems[index].total = calculateItemTotal(quantity, unitPrice);
         }
-        
+
         setNewPurchase({ ...newPurchase, items: updatedItems });
     };
 
@@ -120,12 +128,6 @@ const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products
         }
         
         try {
-            // Buscar el ID del producto por nombre
-            const productId = getProductIdByName(inventory, newPurchase.items[0].productName);
-            if (!productId) {
-                setMessage('Producto no encontrado en el inventario.');
-                return;
-            }
             
             // Preparar los datos para enviar al backend
             const purchaseData = {
@@ -134,7 +136,8 @@ const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products
                 items: newPurchase.items.map(item => ({
                     product_id: getProductIdByName(inventory, item.productName),
                     productName: item.productName,
-                    quantity: parseInt(item.quantity),
+                    quantity: parseFloat(item.quantity),
+                    unit: item.unit,
                     unitPrice: parseFloat(item.unitPrice),
                     total: parseFloat(item.total)
                 })),
@@ -155,7 +158,7 @@ const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products
             setNewPurchase({
                 date: '',
                 supplierId: '',
-                items: [{ productName: '', quantity: 1, unitPrice: 0, total: 0 }]
+                items: [{ productName: '', quantity: 1, unit: 'u', unitPrice: 0, total: 0 }]
             });
             
             // Recargar las compras
@@ -163,6 +166,9 @@ const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products
                 fetchPurchaseHistory();
             } else {
                 fetchPendingPurchases();
+            }
+            if (reloadProducts) {
+                reloadProducts();
             }
             
         } catch (error) {
@@ -321,25 +327,44 @@ const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products
                             {newPurchase.items.map((item, index) => (
                                 <div key={index} className="item-row">
                                     <div className="form-group">
-                                        <label>Producto:</label>
-                                        <Select
-                                            options={productOptions}
-                                            value={productOptions.find(option => option.value === item.productName)}
-                                            onChange={selectedOption => updateItem(index, 'productName', selectedOption ? selectedOption.value : '')}
-                                            placeholder="Buscar y seleccionar producto..."
-                                            isClearable
+                                        <label>Producto/Insumo:</label>
+                                        <input
+                                            type="text"
+                                            value={item.productName}
+                                            onChange={e => updateItem(index, 'productName', e.target.value)}
+                                            placeholder="Nombre del producto"
+                                            list="product-list"
+                                            required
                                         />
+                                        <datalist id="product-list">
+                                            {inventory.map((p, i) => <option key={i} value={p.name} />)}
+                                        </datalist>
                                     </div>
 
                                     <div className="form-group">
                                         <label>Cantidad:</label>
                                         <input
                                             type="number"
-                                            min="1"
+                                            min="0.01"
+                                            step="0.01"
                                             value={item.quantity}
-                                            onChange={(e) => updateItem(index, 'quantity', parseInt(e.target.value))}
+                                            onChange={(e) => updateItem(index, 'quantity', parseFloat(e.target.value))}
                                             required
                                         />
+                                    </div>
+
+                                    <div className="form-group">
+                                        <label>Unidad:</label>
+                                        <select
+                                            value={item.unit}
+                                            onChange={e => updateItem(index, 'unit', e.target.value)}
+                                        >
+                                            <option value="u">Unidades</option>
+                                            <option value="kg">Kilos (kg)</option>
+                                            <option value="g">Gramos (g)</option>
+                                            <option value="l">Litros (l)</option>
+                                            <option value="ml">Mililitros (ml)</option>
+                                        </select>
                                     </div>
 
                                     <div className="form-group">

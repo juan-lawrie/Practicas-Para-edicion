@@ -25,7 +25,8 @@ from api.views import (
     InventoryChangeViewSet, SaleViewSet, SaleCreate,
     UserListCreate, UserDestroy, login_view, ExportDataView,
     UserQueryViewSet, SupplierViewSet, UserStorageViewSet, CurrentUserView,
-    LowStockReportCreateView, LowStockReportListView, LowStockReportUpdateView
+    LowStockReportCreateView, LowStockReportListView, LowStockReportUpdateView,
+    RecipeIngredientViewSet
 )
 from api.views import RoleViewSet
 from api.views import PurchaseViewSet, OrderViewSet, refresh_from_cookie, logout_view
@@ -51,6 +52,7 @@ router.register(r'purchases', PurchaseViewSet, basename='purchase')
 router.register(r'orders', OrderViewSet, basename='order')
 router.register(r'suppliers', SupplierViewSet, basename='supplier')
 router.register(r'inventory-change-audits', __import__('api.views', fromlist=['InventoryChangeAuditViewSet']).InventoryChangeAuditViewSet, basename='inventory-change-audit')
+router.register(r'recipe-ingredients', RecipeIngredientViewSet, basename='recipe-ingredient')
 
 
 def root_redirect(request):

@@ -657,6 +657,7 @@ const App = () => {
                     id: product.id,
                     name: product.name,
                     stock: product.stock,
+                    unit: product.unit,
                     type: product.category || 'Producto',
                     price: product.price,      // Ahora sí se incluye el precio
                     estado: product.estado     // Y el estado si viene del backend
@@ -766,6 +767,7 @@ const App = () => {
           price: product.price,
           category: product.category || 'Producto',
           stock: product.stock,
+          unit: product.unit || '',
           description: product.description || '',
           status: 'Sincronizado',
           hasSales: false,
@@ -1041,6 +1043,38 @@ const App = () => {
         const lowStockProducts = lowStockItems.filter(item => item.category === 'Producto');
         const lowStockSupplies = lowStockItems.filter(item => item.category === 'Insumo');
 
+        const formatStockDisplay = (stock, unit) => {
+            const stockNum = parseFloat(stock);
+            if (isNaN(stockNum)) {
+                return `0 unidades`;
+            }
+
+            let displayValue;
+            let displayUnit;
+
+            if (unit === 'g') {
+                displayValue = stockNum / 1000;
+                displayUnit = 'kilos';
+            } else if (unit === 'ml') {
+                displayValue = stockNum / 1000;
+                displayUnit = 'litros';
+            } else if (unit === 'kg') {
+                displayValue = stockNum;
+                displayUnit = 'kilos';
+            } else if (unit === 'l') {
+                displayValue = stockNum;
+                displayUnit = 'litros';
+            } else {
+                displayValue = stockNum;
+                displayUnit = 'unidades';
+            }
+
+            // Format number to remove trailing zeros from decimals, up to 3 decimal places
+            const formattedValue = Number(displayValue.toFixed(3));
+
+            return `${formattedValue} ${displayUnit}`;
+        };
+
         return (
             <div className="dashboard-container">
                 <h2>Dashboard de {userRole}</h2>
@@ -1055,7 +1089,7 @@ const App = () => {
                                     <ul className="alert-list">
                                         {lowStockProducts.map(item => (
                                             <li key={item.id} className="alert-item">
-                                                <strong>{item.name}</strong>: ¡Solo quedan {item.stock} unidades! (Umbral: {item.lowStockThreshold || 10})
+                                                <strong>{item.name}</strong>: ¡Solo quedan {formatStockDisplay(item.stock, item.unit)}! (Umbral: {item.lowStockThreshold || 10})
                                             </li>
                                         ))}
                                     </ul>
@@ -1068,7 +1102,7 @@ const App = () => {
                                     <ul className="alert-list">
                                         {lowStockSupplies.map(item => (
                                             <li key={item.id} className="alert-item">
-                                                <strong>{item.name}</strong>: ¡Solo quedan {item.stock} unidades! (Umbral: {item.lowStockThreshold || 10})
+                                                <strong>{item.name}</strong>: ¡Solo quedan {formatStockDisplay(item.stock, item.unit)}! (Umbral: {item.lowStockThreshold || 10})
                                             </li>
                                         ))}
                                     </ul>
@@ -1284,13 +1318,13 @@ const App = () => {
         const handleRegisterChange = (e) => {
             if (e && typeof e.preventDefault === 'function') e.preventDefault();
             // Validaciones previas: producto seleccionado y cantidad válida
-            const qty = parseInt(change.quantity, 10);
+            const qty = parseFloat(String(change.quantity).replace(',', '.'));
             if (!change.productId) {
                 alert('Debes seleccionar un producto.');
                 return;
             }
             if (isNaN(qty) || qty <= 0) {
-                alert('La cantidad debe ser un número positivo (ej: 3). El sistema lo tomará como una salida excepcional.');
+                alert('La cantidad debe ser un número positivo (ej: 3.5). El sistema lo tomará como una salida excepcional.');
                 return;
             }
 
@@ -1302,12 +1336,17 @@ const App = () => {
             // Ejecutar la acción tras confirmación
             const product = inventory.find(p => p.id === change.productId || String(p.id) === String(change.productId));
             // Tomar cantidad como valor absoluto (si el usuario escribió -3 o 3)
-            const quantity = Math.abs(parseInt(change.quantity, 10));
+            let quantity = Math.abs(parseFloat(String(change.quantity).replace(',', '.')));
             const reason = change.reason;
             if (!product) {
                 alert('Producto no encontrado.');
                 setConfirmOpen(false);
                 return;
+            }
+
+            // Convert quantity to base unit (grams or ml) if necessary
+            if (product.unit === 'g' || product.unit === 'ml') {
+                quantity = quantity * 1000;
             }
 
             if (isNaN(quantity) || quantity <= 0) {
@@ -1356,10 +1395,19 @@ const App = () => {
                         {inventory
                             .filter(item => item.type === 'Producto')
                             .map(item => {
+                                let stockDisplay;
+                                const stockNum = parseFloat(item.stock);
+                                if (item.unit === 'g') {
+                                    stockDisplay = `${parseFloat((stockNum / 1000).toFixed(3))} kilos`;
+                                } else if (item.unit === 'ml') {
+                                    stockDisplay = `${parseFloat((stockNum / 1000).toFixed(3))} litros`;
+                                } else {
+                                    stockDisplay = `${stockNum} unidades`;
+                                }
                                 return (
                                     <li key={item.id} className="list-item">
                                         <span className="inventory-name">{item.name}</span>
-                                        <span className="inventory-stock">{item.stock} unidades</span>
+                                        <span className="inventory-stock">{stockDisplay}</span>
                                     </li>
                                 );
                             })}
@@ -1370,10 +1418,19 @@ const App = () => {
                         {inventory
                             .filter(item => item.type === 'Insumo')
                             .map(item => {
+                                let stockDisplay;
+                                const stockNum = parseFloat(item.stock);
+                                if (item.unit === 'g') {
+                                    stockDisplay = `${parseFloat((stockNum / 1000).toFixed(3))} kilos`;
+                                } else if (item.unit === 'ml') {
+                                    stockDisplay = `${parseFloat((stockNum / 1000).toFixed(3))} litros`;
+                                } else {
+                                    stockDisplay = `${stockNum} unidades`;
+                                }
                                 return (
                                     <li key={item.id} className="list-item">
                                         <span className="inventory-name">{item.name}</span>
-                                        <span className="inventory-stock">{item.stock} kilogramos</span>
+                                        <span className="inventory-stock">{stockDisplay}</span>
                                     </li>
                                 );
                             })}
@@ -1407,10 +1464,10 @@ const App = () => {
                                     })()}
                                     onChange={(selected) => setChange({ ...change, productId: selected ? selected.value : '' })}
                                 />
-                                <input type="number" value={change.quantity} onChange={e => setChange({ ...change, quantity: e.target.value })} placeholder="Cantidad (ej: 3) - será tomada como salida" required />
+                                <input type="number" step="0.01" value={change.quantity} onChange={e => setChange({ ...change, quantity: e.target.value })} placeholder="Cantidad (ej: 3.5) - será tomada como salida" required />
                                 <input type="text" value={change.reason} onChange={e => setChange({ ...change, reason: e.target.value })} placeholder="Motivo (ej: Desperdicio, Contaminación)" required />
                                 <div className="button-group">
-                                    <button type="submit" className="action-button primary" disabled={!change.productId || isNaN(parseInt(change.quantity, 10)) || parseInt(change.quantity, 10) <= 0}>Guardar Salida</button>
+                                    <button type="submit" className="action-button primary" disabled={!change.productId || isNaN(parseFloat(change.quantity)) || parseFloat(change.quantity) <= 0}>Guardar Salida</button>
                                     <button type="button" className="action-button secondary" onClick={() => { setShowChangeForm(false); setChange({ productId: '', quantity: '', reason: '' }); }}>Cancelar</button>
                                 </div>
                             </form>
@@ -1803,9 +1860,37 @@ const App = () => {
                 price: 0, 
                 stock: 0, 
                 low_stock_threshold: 10,
-                category: 'Producto' // Añadimos la categoría por defecto
+                category: 'Producto'
             });
+            const [recipeItems, setRecipeItems] = useState([{ ingredient: '', quantity: '', unit: 'g' }]);
             const [message, setMessage] = useState('');
+
+            const handleRecipeChange = (index, field, value) => {
+                const newRecipeItems = [...recipeItems];
+                newRecipeItems[index][field] = value;
+
+                if (field === 'ingredient') {
+                    const selectedIngredient = products.find(p => p.id === value);
+                    if (selectedIngredient) {
+                        newRecipeItems[index]['unit'] = selectedIngredient.unit;
+                    }
+                }
+
+                setRecipeItems(newRecipeItems);
+            };
+
+            const addRecipeItem = () => {
+                setRecipeItems([...recipeItems, { ingredient: '', quantity: '', unit: 'g' }]);
+            };
+
+            const removeRecipeItem = (index) => {
+                const newRecipeItems = recipeItems.filter((_, i) => i !== index);
+                setRecipeItems(newRecipeItems);
+            };
+
+            const ingredientOptions = products
+                .filter(p => p.category === 'Insumo')
+                .map(p => ({ value: p.id, label: p.name }));
     
             const handleCreateProduct = async (e) => {
                 e.preventDefault();
@@ -1859,17 +1944,56 @@ const App = () => {
                         setMessage('🚫 Error: Token de autenticación malformado. Por favor, vuelve a iniciar sesión.');
                         return;
                     }
+
+                    if (newProduct.category === 'Producto' && newProduct.stock > 0) {
+                        for (const item of recipeItems) {
+                            if (!item.ingredient || !item.quantity || parseFloat(item.quantity) <= 0) {
+                                setMessage('🚫 Error: Todos los insumos de la receta deben tener un ingrediente seleccionado y una cantidad válida.');
+                                return;
+                            }
+    
+                            const ingredientInStore = products.find(p => p.id === item.ingredient);
+                            if (!ingredientInStore) {
+                                setMessage(`🚫 Error: El insumo con ID ${item.ingredient} no se encuentra en el inventario.`);
+                                return;
+                            }
+    
+                            const requiredQuantity = parseFloat(item.quantity) * parseInt(newProduct.stock, 10);
+                            if (ingredientInStore.stock < requiredQuantity) {
+                                setMessage(`🚫 Error: Stock insuficiente para el insumo "${ingredientInStore.name}". Se necesitan ${requiredQuantity} ${item.unit} para crear ${newProduct.stock} unidades del producto, pero solo hay ${ingredientInStore.stock} ${ingredientInStore.unit || ''} disponibles.`);
+                                return;
+                            }
+                        }
+                    }
+
+                    let recipePayload = [];
+                    if (newProduct.category === 'Producto') {
+                        recipePayload = recipeItems
+                            .filter(item => item.ingredient && parseFloat(item.quantity) > 0)
+                            .map(item => ({
+                                ingredient: item.ingredient,
+                                quantity: parseFloat(item.quantity),
+                                unit: item.unit,
+                            }));
+    
+                        if (recipeItems.some(item => item.ingredient && (!item.quantity || parseFloat(item.quantity) <= 0))) {
+                            setMessage('🚫 Error: Todos los insumos de la receta deben tener una cantidad mayor a 0.');
+                            return;
+                        }
+                    }
                     
-                    
-                    // Crear producto en el backend
-                    const response = await api.post('/products/', {
+                    const payload = {
                         name: newProduct.name.trim(),
                         description: newProduct.description.trim(),
                         price: parseFloat(newProduct.price),
                         stock: parseInt(newProduct.stock),
                         low_stock_threshold: parseInt(newProduct.low_stock_threshold),
-                        category: newProduct.category
-                    });
+                        category: newProduct.category,
+                        recipe_ingredients: recipePayload
+                    };
+                    
+                    // Crear producto en el backend
+                    const response = await api.post('/products/', payload);
 
                     // Recargar productos desde PostgreSQL para mantener sincronización
                     await loadProducts();
@@ -1883,6 +2007,8 @@ const App = () => {
                         low_stock_threshold: 10,
                         category: 'Producto'
                     });
+                    setRecipeItems([{ ingredient: '', quantity: '', unit: 'g' }]);
+
                     setMessage('✅ Producto creado exitosamente y datos recargados desde PostgreSQL.');
                     console.log('🔄 Productos recargados desde PostgreSQL después de crear producto');
                 } catch (error) {
@@ -1892,7 +2018,7 @@ const App = () => {
                     if (error.response) {
                         // Error con respuesta del servidor
                         if (error.response.status === 400) {
-                            setMessage('🚫 Error: ' + (error.response.data.detail || 'Datos inválidos.'));
+                            setMessage('🚫 Error: ' + (error.response.data.detail || JSON.stringify(error.response.data)));
                         } else if (error.response.status === 401) {
                             setMessage('🚫 Error: No tienes autorización. Inicia sesión nuevamente.');
                         } else if (error.response.status === 403) {
@@ -1909,6 +2035,8 @@ const App = () => {
                     }
                 }
             };
+
+
     
             return (
                 <div className="creation-container">
@@ -1933,15 +2061,7 @@ const App = () => {
                             placeholder="Descripción del producto (opcional)"
                             rows="3"
                         />
-                        <p>Categoría</p>
-                        <select
-                            value={newProduct.category}
-                            onChange={e => setNewProduct({ ...newProduct, category: e.target.value })}
-                            required
-                        >
-                            <option value="Producto">Producto</option>
-                            <option value="Insumo">Insumo</option>
-                        </select>
+                        
                         <p>Precio</p>
                         <input 
                             type="number" 
@@ -1969,6 +2089,41 @@ const App = () => {
                             placeholder="Umbral de Stock Bajo (por defecto: 10)" 
                             min="0"
                         />
+
+
+
+                        {newProduct.category === 'Producto' && (
+                            <div className="recipe-builder">
+                                <h4>Receta (Insumos por unidad de producto)</h4>
+                                {recipeItems.map((item, index) => (
+                                    <div key={index} className="recipe-item">
+                                        <Select
+                                            options={ingredientOptions}
+                                            value={ingredientOptions.find(opt => opt.value === item.ingredient)}
+                                            onChange={selectedOption => handleRecipeChange(index, 'ingredient', selectedOption ? selectedOption.value : '')}
+                                            placeholder="Seleccionar insumo..."
+                                        />
+                                        <input
+                                            type="number"
+                                            value={item.quantity}
+                                            onChange={e => handleRecipeChange(index, 'quantity', e.target.value)}
+                                            placeholder="Cantidad"
+                                            min="0"
+                                        />
+                                        <select
+                                            value={item.unit}
+                                            onChange={e => handleRecipeChange(index, 'unit', e.target.value)}
+                                        >
+                                            <option value="g">Gramos (g)</option>
+                                            <option value="ml">Mililitros (ml)</option>
+                                            <option value="unidades">Unidades</option>
+                                        </select>
+                                        <button type="button" onClick={() => removeRecipeItem(index)}>Eliminar</button>
+                                    </div>
+                                ))}
+                                <button type="button" onClick={addRecipeItem}>Agregar Insumo</button>
+                            </div>
+                        )}
                         <button type="submit" className="main-button">Crear Producto</button>
                     </form>
                 </div>
@@ -3187,11 +3342,12 @@ const PurchaseRequests = () => {
     
         // Mapeo de traducción para encabezados de tablas
         const headerTranslationMap = {
-            'name': 'Producto/Insumo',
+            
+            'name': 'Nombre',
             'cuit': 'CUIT',
             'phone': 'Teléfono',
             'address': 'Dirección',
-            'products': 'Productos',
+            'products': 'Producto',
             'items': 'Insumo/Producto',
             'id': 'ID',
             'date': 'Fecha',
@@ -3225,7 +3381,7 @@ const PurchaseRequests = () => {
             'paymentMethod': 'Método de Pago',
             'payment_method': 'Método de Pago',
             'payment_method': 'Método de Pago',
-            'products': 'Productos',
+            'products': 'Producto/Insumo',
             'units': 'Unidades',
             'totalMovements': 'Total de Movimientos',
             'totalIncome': 'Ingresos Totales',
@@ -3331,7 +3487,7 @@ const PurchaseRequests = () => {
                         category: editingProduct.category,
                         stock: editingProduct.stock,
                         description: editingProduct.description,
-                        lowStockThreshold: editingProduct.lowStockThreshold
+                        low_stock_threshold: editingProduct.lowStockThreshold
                     };
 
                     await api.put(`/products/${selectedProduct.id}/`, updatedProduct);
@@ -3349,7 +3505,18 @@ const PurchaseRequests = () => {
                     setMessage('✅ Producto actualizado correctamente en el servidor. Los cambios se reflejan en todas las secciones.');
                 } catch (error) {
                     console.error('Error actualizando producto en el servidor:', error);
-                    setMessage('❌ Error: No se pudo actualizar el producto en el servidor. Los cambios no fueron guardados.');
+                    if (error.response && error.response.data) {
+                        const errorData = error.response.data;
+                        if (typeof errorData === 'string') {
+                            setMessage(`❌ Error: ${errorData}`);
+                        } else if (errorData.detail) {
+                            setMessage(`❌ Error: ${errorData.detail}`);
+                        } else {
+                            setMessage('❌ Error: No se pudo actualizar el producto. Verifique los datos.');
+                        }
+                    } else {
+                        setMessage('❌ Error: No se pudo actualizar el producto en el servidor. Los cambios no fueron guardados.');
+                    }
                 }
             };
     
@@ -3747,6 +3914,7 @@ const PurchaseRequests = () => {
                         products={products}
                         purchases={purchases}
                         reloadPurchases={fetchPurchases}
+                        reloadProducts={loadProducts}
                     /> : <div>Acceso Denegado</div>;
             case 'pedidos':
                 return userRole === 'Gerente' ? <OrderManagement /> : <div>Acceso Denegado</div>;
@@ -3756,12 +3924,11 @@ const PurchaseRequests = () => {
                     getInMemoryToken={getInMemoryToken}
                     loadSales={loadSales}
                     loadCashMovements={loadCashMovements}
-                    inventory={inventory}
-                    suppliers={suppliers}
-                    purchases={purchases}
-                    orders={orders}
-                    cashMovements={cashMovements}
-                    sales={sales}
+                            inventory={inventory}
+                            suppliers={suppliers}
+                            purchases={purchaseHistory}
+                            orders={orders}
+                            cashMovements={cashMovements}                    sales={sales}
                     headerTranslationMap={headerTranslationMap}
                     safeToFixed={safeToFixed}
                 />;

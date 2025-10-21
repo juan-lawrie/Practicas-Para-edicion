@@ -1,7 +1,15 @@
 # backend/api/serializers.py
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .models import Product, CashMovement, InventoryChange, Sale, SaleItem, Role, UserQuery, Supplier, UserStorage, LowStockReport
+from .models import (
+    Product, CashMovement, InventoryChange, Sale, SaleItem, Role, 
+    UserQuery, Supplier, UserStorage, LowStockReport, RecipeIngredient
+)
+from .models import Purchase
+from .models import Order, OrderItem
+
+User = get_user_model()  # Usa el modelo de usuario personalizado
+
 # Serializer para el modelo de proveedor
 class SupplierSerializer(serializers.ModelSerializer):
     class Meta:
@@ -13,10 +21,6 @@ class UserStorageSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserStorage
         fields = ['id', 'key', 'value', 'updated_at']
-from .models import Purchase
-from .models import Order, OrderItem
-
-User = get_user_model()  # Usa el modelo de usuario personalizado
 
 class RoleSerializer(serializers.ModelSerializer):
     class Meta:
@@ -79,15 +83,30 @@ class UserCreateSerializer(serializers.ModelSerializer):
         )
         return user
 
+# Serializer para los ingredientes de una receta
+class RecipeIngredientSerializer(serializers.ModelSerializer):
+    ingredient_name = serializers.CharField(source='ingredient.name', read_only=True)
+
+    class Meta:
+        model = RecipeIngredient
+        fields = ['id', 'product', 'ingredient', 'ingredient_name', 'quantity', 'unit']
+        read_only_fields = ['product']
+
+# Serializer for writing recipe ingredients
+class RecipeIngredientWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RecipeIngredient
+        fields = ['ingredient', 'quantity', 'unit']
+
 # Serializer para el modelo de producto
 class ProductSerializer(serializers.ModelSerializer):
     estado = serializers.SerializerMethodField()
+    recipe = RecipeIngredientSerializer(many=True, read_only=True)
+    recipe_ingredients = RecipeIngredientWriteSerializer(many=True, write_only=True, required=False)
 
     class Meta:
         model = Product
-        fields = '__all__'
-        # Agregamos 'estado' como campo extra
-        extra_fields = ['estado']
+        fields = ['id', 'name', 'description', 'price', 'stock', 'low_stock_threshold', 'category', 'is_ingredient', 'unit', 'recipe', 'recipe_ingredients', 'estado']
 
     def get_estado(self, obj):
         # Lógica: Activo si stock > 0, Inactivo si stock == 0
@@ -114,8 +133,60 @@ class ProductSerializer(serializers.ModelSerializer):
         if value < 0:
             raise serializers.ValidationError("El umbral de stock bajo no puede ser negativo.")
         return value
+
+    def create(self, validated_data):
+        from django.db import transaction
+        
+        recipe_data = validated_data.pop('recipe_ingredients', [])
+        initial_stock = validated_data.get('stock', 0)
+
+        with transaction.atomic():
+            product = Product.objects.create(**validated_data)
+
+            # Create recipe links
+            for item_data in recipe_data:
+                RecipeIngredient.objects.create(product=product, **item_data)
+
+            # If the created product has an initial stock, deduct ingredients from inventory
+            if initial_stock > 0:
+                for item_data in recipe_data:
+                    ingredient = item_data.get('ingredient')
+                    quantity_per_unit = item_data.get('quantity')
+
+                    if not ingredient or not quantity_per_unit or quantity_per_unit <= 0:
+                        continue
+
+                    total_ingredient_needed = quantity_per_unit * initial_stock
+                    
+                    # Lock ingredient for update and deduct stock
+                    ingredient_to_update = Product.objects.select_for_update().get(pk=ingredient.pk)
+
+                    if ingredient_to_update.stock < total_ingredient_needed:
+                        raise serializers.ValidationError(
+                            f"No hay suficiente stock para el insumo '{ingredient.name}'. "
+                            f"Necesario: {total_ingredient_needed}, Disponible: {ingredient_to_update.stock}"
+                        )
+                    
+                    ingredient_to_update.stock -= total_ingredient_needed
+                    ingredient_to_update.save()
+
+        return product
+
+    def update(self, instance, validated_data):
+        recipe_data = validated_data.pop('recipe_ingredients', None)
+        instance = super().update(instance, validated_data)
+
+        if recipe_data is not None:
+            # Clear existing recipe and create new one
+            instance.recipe.all().delete()
+            for recipe_item_data in recipe_data:
+                RecipeIngredient.objects.create(product=instance, **recipe_item_data)
+        
+        return instance
+
 # Serializer para el modelo de movimiento de caja
 class CashMovementSerializer(serializers.ModelSerializer):
+   
     user = serializers.ReadOnlyField(source='user.username')
     
     class Meta:
@@ -134,25 +205,26 @@ class InventoryChangeSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         # Normalize quantity: accept negative for 'Salida' but store positive
+        from decimal import Decimal, InvalidOperation
         change_type = attrs.get('type') or getattr(self.instance, 'type', None)
         qty = attrs.get('quantity')
         if qty is None:
             raise serializers.ValidationError({'quantity': 'La cantidad es requerida.'})
 
         try:
-            qty_int = int(qty)
-        except (TypeError, ValueError):
+            qty_decimal = Decimal(str(qty))
+        except InvalidOperation:
             raise serializers.ValidationError({'quantity': 'Cantidad inválida.'})
 
-        if change_type == 'Salida' and qty_int > 0:
+        if change_type == 'Salida' and qty_decimal > 0:
             # allow frontend to send negative; but accept positive and interpret as exit
             # we will treat quantity as absolute value when applying
             pass
 
-        if qty_int < 0:
-            qty_int = abs(qty_int)
+        if qty_decimal < 0:
+            qty_decimal = abs(qty_decimal)
 
-        attrs['quantity'] = qty_int
+        attrs['quantity'] = qty_decimal
         return attrs
 
 
@@ -248,7 +320,7 @@ class PurchaseSerializer(serializers.ModelSerializer):
             return total
         return obj.total_amount
 
-
+#Serializador para  un solo articulo dentro de un pedido
 class OrderItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrderItem
