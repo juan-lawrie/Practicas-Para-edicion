@@ -1,8 +1,142 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Select from 'react-select';
 import api from '../services/api';
 import PurchaseRequests from './PurchaseRequests';
 import PurchaseHistory from './PurchaseHistory';
+
+// Componente híbrido que usa datalist en Firefox/Safari y dropdown personalizado en Chrome/Brave
+const SearchableProductInput = ({ value, onChange, inventory, mapBackendUnitToFrontend, isExistingProduct, itemIndex }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const [filteredOptions, setFilteredOptions] = useState([]);
+    const inputRef = useRef(null);
+    const dropdownRef = useRef(null);
+
+    // Detectar si está corriendo en Chrome o Brave
+    const isChromiumBrowser = () => {
+        return window.chrome !== undefined || 
+               navigator.userAgent.includes('Chrome') || 
+               navigator.userAgent.includes('Brave') ||
+               navigator.userAgent.includes('Chromium');
+    };
+
+    const isChromium = isChromiumBrowser();
+
+    // Generar opciones filtradas para el dropdown personalizado
+    useEffect(() => {
+        if (isChromium) {
+            if (value && value.length > 0) {
+                const filtered = inventory.filter(product => 
+                    product.name.toLowerCase().includes(value.toLowerCase())
+                ).slice(0, 8);
+                setFilteredOptions(filtered);
+            } else {
+                setFilteredOptions(inventory.slice(0, 8));
+            }
+        }
+    }, [value, inventory, isChromium]);
+
+    // Cerrar dropdown al hacer clic fuera (solo para Chromium)
+    useEffect(() => {
+        if (!isChromium) return;
+        
+        const handleClickOutside = (event) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(event.target) &&
+                inputRef.current && !inputRef.current.contains(event.target)) {
+                setIsOpen(false);
+            }
+        };
+
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [isChromium]);
+
+    const handleInputChange = (e) => {
+        onChange(e.target.value);
+        if (isChromium) {
+            setIsOpen(true);
+        }
+    };
+
+    const handleOptionClick = (productName) => {
+        onChange(productName);
+        setIsOpen(false);
+        inputRef.current?.focus();
+    };
+
+    const getBorderColor = () => {
+        if (isExistingProduct(value)) return '#28a745';
+        if (value && !isExistingProduct(value)) return '#ffc107';
+        return '#ced4da';
+    };
+
+    const getStatusMessage = () => {
+        if (!value) return null;
+        if (isExistingProduct(value)) {
+            return <small style={{ color: '#28a745', fontSize: '0.8em' }}>✓ Producto existente - unidad detectada automáticamente</small>;
+        }
+        return <small style={{ color: '#ffc107', fontSize: '0.8em' }}>⚠ Producto nuevo - debe ingresar manualmente la unidad</small>;
+    };
+
+    // Crear un ID único para el datalist
+    const datalistId = `product-list-${itemIndex}`;
+
+    return (
+        <div className="searchable-product-input-container">
+            <input
+                ref={inputRef}
+                type="text"
+                value={value}
+                onChange={handleInputChange}
+                onFocus={() => isChromium && setIsOpen(true)}
+                placeholder="Escribe para buscar un producto existente o ingresa uno nuevo"
+                required
+                style={{
+                    borderColor: getBorderColor(),
+                    width: '100%'
+                }}
+                className="searchable-product-input"
+                list={!isChromium ? datalistId : undefined}
+            />
+            
+            {/* Datalist para Firefox/Safari */}
+            {!isChromium && (
+                <datalist id={datalistId}>
+                    {inventory.map((product, index) => (
+                        <option 
+                            key={`${product.id}-${index}`} 
+                            value={product.name}
+                        >
+                            {product.name} ({mapBackendUnitToFrontend(product.unit)}) - {product.quantity}
+                        </option>
+                    ))}
+                </datalist>
+            )}
+
+            {/* Dropdown personalizado para Chrome/Brave */}
+            {isChromium && isOpen && filteredOptions.length > 0 && (
+                <div 
+                    ref={dropdownRef} 
+                    className="searchable-product-dropdown chromium-browser"
+                >
+                    {filteredOptions.map((product, index) => (
+                        <div
+                            key={`${product.id}-${index}`}
+                            className="searchable-product-option"
+                            onClick={() => handleOptionClick(product.name)}
+                        >
+                            <span className="product-name">
+                                {product.name}
+                            </span>
+                            <span className="product-unit">({mapBackendUnitToFrontend(product.unit)})</span>
+                            <span className="product-stock">{product.quantity}</span>
+                        </div>
+                    ))}
+                </div>
+            )}
+            {getStatusMessage()}
+        </div>
+    );
+};
 
 const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products = [], purchases = [], reloadPurchases, reloadProducts }) => {
     const [pendingPurchases, setPendingPurchases] = useState([]);
@@ -10,7 +144,10 @@ const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products
     const [view, setView] = useState('requests'); // 'requests', 'history', or 'create'
     const [message, setMessage] = useState('');
     const [showAddPurchase, setShowAddPurchase] = useState(false);
-    const [confirmDelete, setConfirmDelete] = useState(null); // ID de la compra a eliminar
+    const [confirmDelete, setConfirmDelete] = useState(null); // ID de la compra a eliminar (legacy)
+    const [showConfirmPurchase, setShowConfirmPurchase] = useState(false); // Confirmación para registrar compra
+    const [showConfirmDeleteModal, setShowConfirmDeleteModal] = useState(false); // Modal para confirmar eliminación
+    const [pendingDeleteId, setPendingDeleteId] = useState(null);
     const [newPurchase, setNewPurchase] = useState({
         date: '',
         supplierId: '',
@@ -52,6 +189,11 @@ const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products
         return product ? product.id : null;
     };
 
+    // Función para verificar si un producto existe en el inventario
+    const isExistingProduct = (productName) => {
+        return inventory.some(p => p.name === productName);
+    };
+
     // Función para calcular el total de un item
     const calculateItemTotal = (quantity, unitPrice) => {
         const safeQuantity = isNaN(quantity) ? 0 : (quantity || 0);
@@ -75,6 +217,20 @@ const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products
         }
     };
 
+    // Función para mapear unidades del backend al frontend
+    const mapBackendUnitToFrontend = (backendUnit) => {
+        switch (backendUnit) {
+            case 'g':
+                return 'kg'; // Convertir gramos a kilos para compras
+            case 'ml':
+                return 'l'; // Convertir mililitros a litros para compras
+            case 'unidades':
+                return 'u';
+            default:
+                return 'u'; // Por defecto unidades
+        }
+    };
+
     // Función para actualizar un item
     const updateItem = (index, field, value) => {
         const updatedItems = [...newPurchase.items];
@@ -83,15 +239,22 @@ const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products
         if (field === 'productName') {
             const product = inventory.find(p => p.name === value);
             if (product) {
-                updatedItems[index].unitPrice = product.price;
-                updatedItems[index].unit = product.unit || 'u';
+                // Auto-completar precio y detectar unidad automáticamente
+                updatedItems[index].unitPrice = product.price || 0;
+                updatedItems[index].unit = mapBackendUnitToFrontend(product.unit);
+            } else if (value === '') {
+                // Si se borra el nombre del producto, resetear valores
+                updatedItems[index].unitPrice = 0;
+                updatedItems[index].unit = 'u';
             }
+            // Si no es un producto existente pero tiene texto, mantener valores actuales
+            // para que el usuario pueda ingresar manualmente
         }
 
         // Recalcular el total del item
         if (field === 'quantity' || field === 'unitPrice' || field === 'productName') {
-            const quantity = updatedItems[index].quantity;
-            const unitPrice = updatedItems[index].unitPrice;
+            const quantity = updatedItems[index].quantity || 0;
+            const unitPrice = updatedItems[index].unitPrice || 0;
             updatedItems[index].total = calculateItemTotal(quantity, unitPrice);
         }
 
@@ -105,31 +268,36 @@ const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products
 
     const handleAddPurchase = async (e) => {
         e.preventDefault();
-        
-        // Validaciones
+
+        // Validaciones (las mismas que antes)
         if (!newPurchase.date) {
             setMessage('Por favor, ingrese una fecha.');
             return;
         }
-        
+
         if (!newPurchase.supplierId) {
             setMessage('Por favor, seleccione un proveedor.');
             return;
         }
-        
+
         // Validar que todos los items tengan producto y cantidad
         const hasInvalidItems = newPurchase.items.some(item => 
             !item.productName || item.quantity <= 0
         );
-        
+
         if (hasInvalidItems) {
             setMessage('Por favor, complete todos los productos y cantidades.');
             return;
         }
-        
+
+        // Mostrar modal de confirmación (más visible)
+        setShowConfirmPurchase(true);
+    };
+
+    // Confirmar registro de compra (ejecuta la petición)
+    const confirmAddPurchase = async () => {
+        setShowConfirmPurchase(false);
         try {
-            
-            // Preparar los datos para enviar al backend
             const purchaseData = {
                 date: newPurchase.date,
                 supplier_id: parseInt(newPurchase.supplierId),
@@ -143,24 +311,23 @@ const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products
                 })),
                 total_amount: calculatePurchaseTotal(),
             };
-            
+
             console.log('Enviando datos de compra:', purchaseData);
-            
             const response = await api.post('/purchases/', purchaseData);
             console.log('Respuesta del servidor:', response.data);
-            
+
             setMessage(userRole === 'Gerente' ? 
                 'Compra registrada y completada con éxito.' : 
                 'Solicitud de compra enviada. Esperando aprobación del gerente.'
             );
-            
+
             // Limpiar el formulario
             setNewPurchase({
                 date: '',
                 supplierId: '',
                 items: [{ productName: '', quantity: 1, unit: 'u', unitPrice: 0, total: 0 }]
             });
-            
+
             // Recargar las compras
             if (userRole === 'Gerente') {
                 fetchPurchaseHistory();
@@ -170,38 +337,46 @@ const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products
             if (reloadProducts) {
                 reloadProducts();
             }
-            
         } catch (error) {
             console.error('Error al registrar la compra:', error);
             setMessage('Error al registrar la compra. Por favor, intente nuevamente.');
         }
     };
 
-    // Función para eliminar una compra del historial
-    const handleDeletePurchase = async (purchaseId) => {
-        if (confirmDelete === purchaseId) {
-            try {
-                await api.delete(`/purchases/${purchaseId}/`);
-                // Actualizar la lista de historial
-                setPurchaseHistory(prev => prev.filter(p => p.id !== purchaseId));
-                setConfirmDelete(null);
-                setMessage('✅ Compra eliminada del historial exitosamente.');
-                setTimeout(() => setMessage(''), 3000);
-            } catch (error) {
-                console.error('Error al eliminar la compra:', error);
-                setMessage('Error al eliminar la compra.');
-                setTimeout(() => setMessage(''), 3000);
-            }
-        } else {
-            setConfirmDelete(purchaseId);
-            setMessage('⚠️ ¿Estás seguro de que deseas eliminar esta compra del historial? Haz clic nuevamente en "Eliminar" para confirmar.');
-            setTimeout(() => setMessage(''), 5000);
+    // Función para cancelar la confirmación de compra
+    const handleCancelPurchase = () => {
+        setShowConfirmPurchase(false);
+        setMessage('');
+    };
+
+    // Función para iniciar confirmación de eliminación (abre modal)
+    const handleDeletePurchase = (purchaseId) => {
+        setPendingDeleteId(purchaseId);
+        setShowConfirmDeleteModal(true);
+    };
+
+    // Función que confirma y ejecuta la eliminación
+    const confirmDeletePurchase = async () => {
+        if (!pendingDeleteId) return;
+        try {
+            await api.delete(`/purchases/${pendingDeleteId}/`);
+            // Actualizar la lista de historial
+            setPurchaseHistory(prev => prev.filter(p => p.id !== pendingDeleteId));
+            setPendingDeleteId(null);
+            setShowConfirmDeleteModal(false);
+            setMessage('✅ Compra eliminada del historial exitosamente.');
+            setTimeout(() => setMessage(''), 3000);
+        } catch (error) {
+            console.error('Error al eliminar la compra:', error);
+            setMessage('Error al eliminar la compra.');
+            setTimeout(() => setMessage(''), 3000);
         }
     };
 
-    // Función para cancelar la eliminación
-    const handleCancelDelete = () => {
-        setConfirmDelete(null);
+    // Cancelar diálogo de eliminación
+    const handleCancelDeleteModal = () => {
+        setPendingDeleteId(null);
+        setShowConfirmDeleteModal(false);
         setMessage('');
     };
 
@@ -269,6 +444,34 @@ const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products
         <div className="purchase-management-container">
             <h2>Gestión de Compras</h2>
             {message && <p className="message">{message}</p>}
+
+            {/* Modal de confirmación para registrar compra */}
+            {showConfirmPurchase && (
+                <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000}}>
+                    <div style={{background: '#fff', padding: '20px', borderRadius: '8px', width: '90%', maxWidth: '480px', boxShadow: '0 8px 24px rgba(0,0,0,0.2)'}}>
+                        <h3 style={{marginTop: 0}}>Confirmar registro de compra</h3>
+                        <p>¿Estás seguro que deseas {userRole === 'Gerente' ? 'registrar esta compra' : 'enviar esta solicitud de compra'}?</p>
+                        <div style={{display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px'}}>
+                            <button onClick={confirmAddPurchase} className="action-button primary">Confirmar</button>
+                            <button onClick={handleCancelPurchase} className="action-button secondary">Cancelar</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal de confirmación para eliminar compra del historial */}
+            {showConfirmDeleteModal && (
+                <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000}}>
+                    <div style={{background: '#fff', padding: '20px', borderRadius: '8px', width: '90%', maxWidth: '480px', boxShadow: '0 8px 24px rgba(0,0,0,0.2)'}}>
+                        <h3 style={{marginTop: 0}}>Confirmar eliminación</h3>
+                        <p>¿Estás seguro que deseas eliminar esta compra del historial? Esta acción no se puede deshacer.</p>
+                        <div style={{display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px'}}>
+                            <button onClick={confirmDeletePurchase} className="action-button primary">Eliminar</button>
+                            <button onClick={handleCancelDeleteModal} className="action-button secondary">Cancelar</button>
+                        </div>
+                    </div>
+                </div>
+            )}
             <div className="tab-navigation">
                 <button
                     className={`tab-button ${view === 'create' ? 'active' : ''}`}
@@ -328,17 +531,14 @@ const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products
                                 <div key={index} className="item-row">
                                     <div className="form-group">
                                         <label>Producto/Insumo:</label>
-                                        <input
-                                            type="text"
+                                        <SearchableProductInput
                                             value={item.productName}
-                                            onChange={e => updateItem(index, 'productName', e.target.value)}
-                                            placeholder="Nombre del producto"
-                                            list="product-list"
-                                            required
+                                            onChange={(value) => updateItem(index, 'productName', value)}
+                                            inventory={inventory}
+                                            mapBackendUnitToFrontend={mapBackendUnitToFrontend}
+                                            isExistingProduct={isExistingProduct}
+                                            itemIndex={index}
                                         />
-                                        <datalist id="product-list">
-                                            {inventory.map((p, i) => <option key={i} value={p.name} />)}
-                                        </datalist>
                                     </div>
 
                                     <div className="form-group">
@@ -358,13 +558,20 @@ const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products
                                         <select
                                             value={item.unit}
                                             onChange={e => updateItem(index, 'unit', e.target.value)}
+                                            disabled={isExistingProduct(item.productName)}
+                                            title={isExistingProduct(item.productName) ? 
+                                                'La unidad se detecta automáticamente para productos existentes' : 
+                                                'Selecciona la unidad manualmente para productos nuevos'}
                                         >
                                             <option value="u">Unidades</option>
                                             <option value="kg">Kilos (kg)</option>
-                                            <option value="g">Gramos (g)</option>
                                             <option value="l">Litros (l)</option>
-                                            <option value="ml">Mililitros (ml)</option>
                                         </select>
+                                        {isExistingProduct(item.productName) && (
+                                            <small style={{ color: '#666', fontSize: '0.8em' }}>
+                                                ✓ Unidad detectada automáticamente
+                                            </small>
+                                        )}
                                     </div>
 
                                     <div className="form-group">
@@ -427,8 +634,9 @@ const PurchaseManagement = ({ userRole, inventory = [], suppliers = [], products
                     purchases={purchaseHistory} 
                     onDeletePurchase={handleDeletePurchase}
                     confirmDelete={confirmDelete}
-                    onCancelDelete={handleCancelDelete}
+                    onCancelDelete={handleCancelDeleteModal}
                     userRole={userRole}
+                    inventory={inventory}
                 />
             )}
         </div>

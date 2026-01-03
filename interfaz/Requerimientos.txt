@@ -68,3 +68,16 @@ print(superuser.username, superuser.role)
 
 - Ver logs de Docker: docker-compose logs
 - Parar contenedores: docker-compose down
+
+
+#Instalacion Tailwindcss
+
+Ruta de instalacion interfaz/Frontend/interfaz
+
+Comandos para instalacion
+
+1- install -D tailwindcss@3
+2- npx tailwind init -p
+
+Despues de haber ejecutado el segundo comando npx tailwind init -p se tienen que generar
+los archivos tailwind.config.js y postcss.config.js .

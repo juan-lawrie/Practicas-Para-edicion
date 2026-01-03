@@ -1,13 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import Select from 'react-select';
 import './App.css';
-import api, { backendLogin, backendLogout, setInMemoryToken, clearInMemoryToken, getInMemoryToken, getPendingPurchases, approvePurchase, rejectPurchase, getPurchaseHistory } from './services/api';
+import { formatMovementDate } from './utils/date';
+import api, { backendLogin, backendLogout, setInMemoryToken, clearInMemoryToken, getInMemoryToken, getPendingPurchases, approvePurchase, rejectPurchase, getPurchaseHistory, getRecipe, addRecipeIngredient, updateRecipeIngredient, deleteRecipeIngredient, getIngredients, getIngredientsWithSuggestedUnit, updateOrderStatus } from './services/api';
 import userStorage from './services/userStorage';
 import DataConsultation from './DataConsultation';
 import MyUserData from './components/MyUserData';
+import ForgotPassword from './components/ForgotPassword';
 import PurchaseManagement from './components/PurchaseManagement';
+import Proveedores from './components/Proveedores';
 import PurchaseRequests from './components/PurchaseRequests';
 import PurchaseHistory from './components/PurchaseHistory';
+import ProductManagement from './components/ProductManagement';
+import LossManagement from './components/LossManagement';
+import UserManagement from './components/UserManagement';
+import Registrar_Venta from './components/Registrar_Venta';
+import Movimientos_De_Caja from './components/Movimientos_De_Caja';
+import Pedidos from './components/Pedidos';
+import PedDialogo from './components/PedDialogo';
+import Edicion from './components/Edicion';
+import Ver_Reportes_De_Faltantes from './components/Ver_Reportes_De_Faltantes';
 
 
 
@@ -124,6 +136,7 @@ const safeToFixed = (value, decimals = 2) => {
   return isNaN(num) ? (0).toFixed(decimals) : num.toFixed(decimals);
 };
 
+// Use shared formatMovementDate from ./utils/date
 // NOTE: validatePassword and handleLogin are defined inside the App component
 // because they need access to React state setters (setLoginError, setIsLoggedIn, ...).
 
@@ -150,14 +163,19 @@ const passwordPolicy = {
 };
 
 const rolePermissions = {
-    'Gerente': ['Dashboard', 'Inventario', 'Gestión de Usuarios', 'Ventas', 'Pedidos', 'Productos', 'Editar Productos', 'Proveedores', 'Compras', 'Consultas', 'Ver Reportes de Faltantes'],
+    'Gerente': ['Dashboard', 'Inventario', 'Gestión de Usuarios', 'Ventas', 'Pedidos', 'Productos', 'Edicion', 'Proveedores', 'Compras', 'Consultas', 'Ver Reportes de Faltantes'],
     'Panadero': ['Dashboard', 'Inventario', 'Ventas', 'Datos de mi Usuario', 'Reportar Faltantes'],
-    'Encargado': ['Dashboard', 'Inventario', 'Ventas', 'Compras', 'Datos de mi Usuario'],
+    'Encargado': ['Dashboard', 'Inventario', 'Ventas', 'Compras', 'Datos de mi Usuario', 'Gestión de Pérdidas'],
     'Cajero': ['Dashboard', 'Ventas', 'Inventario', 'Datos de mi Usuario', 'Reportar Faltantes'],
   };
 
 // Componente principal de la aplicación.
 const App = () => {
+    
+    // Capturar errores de render
+    try {
+    
+    // (cashSortOrder es manejado localmente dentro de SalesView)
     // Limpiar almacenamiento de productos y movimientos de caja: sólo si ya hay token en memoria
     // (evita llamadas backend en el montaje cuando el usuario no está autenticado)
     React.useEffect(() => {
@@ -169,10 +187,7 @@ const App = () => {
                 try {
                     const removedProducts = await removeLS('products');
                     const removedCash = await removeLS('cashMovements');
-                    console.log('🧹 Almacenamiento limpiado al iniciar (usuario autenticado):');
-                    console.log('- Productos:', removedProducts ? 'Éxito' : 'Con warnings');
-                    console.log('- Movimientos de caja:', removedCash ? 'Éxito' : 'Con warnings');
-                    console.log('✅ Datos se cargarán desde PostgreSQL');
+                    // Almacenamiento limpiado exitosamente
                 } catch (err) {
                     console.warn('Error asíncrono al limpiar almacenamiento:', err);
                 }
@@ -190,6 +205,14 @@ const App = () => {
     const [isLoggedIn, setIsLoggedIn] = useState(false);
     // Indica si ya intentamos restaurar sesión al montar (para evitar parpadeos)
     const [sessionChecked, setSessionChecked] = useState(false);
+    
+    // Monitorear cambios en sessionChecked
+    useEffect(() => {
+        // Monitor de cambios en sessionChecked
+    }, [sessionChecked]);
+
+
+    
     // Intentar restaurar el token en memoria al montar la app y cada vez que la pestaña
     // reciba foco. Esto reduce la ventana donde una nueva pestaña tiene la cookie HttpOnly
     // pero no tiene aún el token en memoria, evitando el caso en que la primera consulta
@@ -201,6 +224,7 @@ const App = () => {
             try {
                 const currentToken = getInMemoryToken();
                 if (currentToken || sessionChecked) return;
+                
                 if (console.debug) console.debug('App: intentando restaurar token en memoria al montar');
                 const restored = await ensureInMemoryToken();
                 if (restored && mounted) {
@@ -213,8 +237,10 @@ const App = () => {
             }
         };
 
-        // llamada inmediata
-        tryRestore();
+        // Solo ejecutar si sessionChecked es false (primera vez)
+        if (!sessionChecked) {
+            tryRestore();
+        }
 
         const onFocus = async () => {
             try {
@@ -229,15 +255,64 @@ const App = () => {
 
         window.addEventListener('focus', onFocus);
         return () => { mounted = false; window.removeEventListener('focus', onFocus); };
-    }, [sessionChecked]);
+    }, []); // Quitar sessionChecked de las dependencias para evitar loop
     const [loginError, setLoginError] = useState('');
-    const [failedAttempts, setFailedAttempts] = useState(0);
-    const [isLocked, setIsLocked] = useState(false);
+    const [failedAttempts, setFailedAttempts] = useState(() => {
+        const saved = sessionStorage.getItem('failedAttempts');
+        return saved ? parseInt(saved, 10) : 0;
+    });
+    const [isLocked, setIsLocked] = useState(() => {
+        const saved = sessionStorage.getItem('isLocked');
+        return saved === 'true';
+    });
+    const [lockType, setLockType] = useState(() => {
+        return sessionStorage.getItem('lockType') || '';
+    });
     const [showModal, setShowModal] = useState(false);
+    const [currentEmail, setCurrentEmail] = useState(() => {
+        return sessionStorage.getItem('currentEmail') || '';
+    });
     const maxAttempts = 5;
+    
+    // Preservar estado crítico en sessionStorage para resistir remontajes de HMR
+    useEffect(() => {
+        sessionStorage.setItem('failedAttempts', failedAttempts.toString());
+        console.log('🔄 failedAttempts cambió a:', failedAttempts, '- Guardado en sessionStorage');
+    }, [failedAttempts]);
+    
+    useEffect(() => {
+        sessionStorage.setItem('isLocked', isLocked.toString());
+        console.log('🔒 isLocked cambió a:', isLocked, '- Guardado en sessionStorage');
+    }, [isLocked]);
+    
+    useEffect(() => {
+        sessionStorage.setItem('lockType', lockType);
+        console.log('🔐 lockType cambió a:', lockType, '- Guardado en sessionStorage');
+    }, [lockType]);
+    
+    useEffect(() => {
+        sessionStorage.setItem('currentEmail', currentEmail);
+        console.log('📧 currentEmail cambió a:', currentEmail, '- Guardado en sessionStorage');
+    }, [currentEmail]);
+    
+    // Verificar si se alcanzó el máximo de intentos y bloquear automáticamente
+    useEffect(() => {
+        if (failedAttempts >= maxAttempts && !isLocked) {
+            console.log('🚫 Máximo de intentos alcanzado, bloqueando cuenta');
+            setIsLocked(true);
+            // NO mostrar modal, solo usar el texto de error en el formulario
+        }
+    }, [failedAttempts, maxAttempts, isLocked]);
+    
+    // Monitorear cambios en isLoggedIn
+    useEffect(() => {
+        console.log('🔐 isLoggedIn cambió a:', isLoggedIn);
+    }, [isLoggedIn]);
      
     // Estado para el rol del usuario actualmente autenticado.
     const [userRole, setUserRole] = useState(null);
+    // Estado para el ID del usuario actual
+    const [currentUserId, setCurrentUserId] = useState(null);
     // Estado para la página current a mostrar.
     const [currentPage, setCurrentPage] = useState('login');
     // Estado para la lista de roles
@@ -292,6 +367,41 @@ const App = () => {
     const handleCancelDeletePurchase = () => {
         setConfirmDeletePurchaseId(null);
     };
+    
+    // Funciones para manejar el diálogo de pedidos
+    const handleOpenPedDialogo = () => {
+        setIsPedDialogoOpen(true);
+        setIsPedDialogoMinimized(false);
+    };
+    
+    const handleClosePedDialogo = () => {
+        setIsPedDialogoOpen(false);
+        setIsPedDialogoMinimized(false);
+    };
+    
+    const handleMinimizePedDialogo = () => {
+        setIsPedDialogoMinimized(!isPedDialogoMinimized);
+    };
+    
+    const handleOpenPedDialogoNewTab = () => {
+        const url = `${window.location.origin}${window.location.pathname}?pedidos-fullscreen=true`;
+        window.open(url, '_blank');
+    };
+
+    // Permitir abrir el diálogo desde cualquier componente usando un evento global
+    React.useEffect(() => {
+        const openDialog = () => handleOpenPedDialogo();
+        window.addEventListener('openPedDialogo', openDialog);
+        return () => window.removeEventListener('openPedDialogo', openDialog);
+    }, []);
+    
+    // Cerrar el diálogo de pedidos cuando se cambia de página
+    React.useEffect(() => {
+        if (isPedDialogoOpen && !isPedDialogoFullscreen) {
+            handleClosePedDialogo();
+        }
+    }, [currentPage]);
+    // ...existing code...
 
         // Validación de contraseña mínima (se usa en creación de usuarios)
         const validatePassword = (pwd) => {
@@ -305,13 +415,38 @@ const App = () => {
 
         // Manejo de login: realiza petición al backend, guarda token y actualiza estado
         const handleLogin = async (e, { email: userEmail, password: userPassword }) => {
-        if (e && typeof e.preventDefault === 'function') e.preventDefault();
+        // NO llamar preventDefault aquí ya que se llama en onSubmit
+        console.log('🔐 handleLogin llamado con:', { email: userEmail });
+        console.log('🔢 failedAttempts al inicio de handleLogin:', failedAttempts);
+        
+        // Verificar si el email cambió y resetear intentos si es necesario
+        if (userEmail && userEmail !== currentEmail) {
+            console.log('📧 Email cambió de', currentEmail, 'a', userEmail, '- Reseteando intentos fallidos');
+            setCurrentEmail(userEmail);
+            setFailedAttempts(0);
+            setIsLocked(false);
+            setLockType('');
+            setShowModal(false);
+            // Limpiar sessionStorage del estado anterior
+            sessionStorage.removeItem('failedAttempts');
+            sessionStorage.removeItem('isLocked');
+            sessionStorage.removeItem('lockType');
+        }
+        
         try {
             setLoginError('');
+            
+            // Limpiar estado de bloqueo del sessionStorage ANTES de cada intento
+            // El servidor es la única fuente de verdad - si está bloqueado, el servidor responderá con error
+            sessionStorage.removeItem('isLocked');
+            sessionStorage.removeItem('lockType');
+            setIsLocked(false);
+            setLockType('');
+            
             // Validaciones mínimas
             if (!userEmail || !userPassword) {
                 setLoginError('Debes ingresar email y contraseña');
-                setFailedAttempts(prev => prev + 1);
+                // NO incrementar failedAttempts para validaciones de frontend
                 return;
             }
             let resp;
@@ -352,9 +487,40 @@ const App = () => {
             try { setInMemoryToken(access); } catch (err) { /* silent */ }
             try { await saveAccessToken(access); } catch (err) { console.warn('No se pudo guardar token:', err); }
 
+            // Resetear intentos fallidos y bloqueo al login exitoso
+            setFailedAttempts(0);
+            setIsLocked(false);
+            setLockType('');
+            
+            // Limpiar estado crítico de sessionStorage al login exitoso
+            sessionStorage.removeItem('failedAttempts');
+            sessionStorage.removeItem('isLocked');
+            sessionStorage.removeItem('lockType');
+            sessionStorage.removeItem('currentEmail');
+            setCurrentEmail('');
+            
+            // Limpiar TODO localStorage de lockTypes al login exitoso
+            try {
+                const keys = Object.keys(localStorage);
+                keys.forEach(key => {
+                    if (key.startsWith('lockType_')) {
+                        localStorage.removeItem(key);
+                    }
+                });
+            } catch (e) {
+                console.error('Error limpiando localStorage en login exitoso:', e);
+            }
+            
+            // Limpiar lockType de localStorage para este usuario
+            try {
+                localStorage.removeItem('lockType_' + userEmail);
+            } catch (e) {}
+            
             setIsLoggedIn(true);
             const roleFromResp = resp?.data?.user?.role || resp?.data?.role || (resp?.data?.user && resp.data.user.role) || 'Gerente';
+            const userIdFromResp = resp?.data?.user?.id || resp?.data?.id || null;
             setUserRole(roleFromResp);
+            setCurrentUserId(userIdFromResp);
             setCurrentPage('dashboard');
 
             // Cargar datos iniciales
@@ -367,9 +533,79 @@ const App = () => {
             console.log('🔐 Login completo y datos iniciales cargados');
         } catch (error) {
             console.error('Error de login con backend:', error?.response?.data || error?.message || error);
-            setFailedAttempts(prev => prev + 1);
-            if (error.response && error.response.status === 401) setLoginError('Credenciales inválidas');
-            else setLoginError('Error iniciando sesión. Revisa la consola.');
+            
+            // Manejar errores específicos del backend
+            const errorData = error?.response?.data?.error;
+            console.log('🔍 DEBUG - errorData completo:', JSON.stringify(errorData, null, 2));
+            console.log('🔍 DEBUG - error.response.data:', JSON.stringify(error?.response?.data, null, 2));
+            if (errorData) {
+                // Actualizar intentos fallidos desde el backend
+                if (typeof errorData.failed_attempts === 'number') {
+                    console.log('🔢 Actualizando intentos fallidos desde backend:', errorData.failed_attempts);
+                    setFailedAttempts(errorData.failed_attempts);
+                } else {
+                    console.log('🔢 Incrementando intentos fallidos localmente');
+                    setFailedAttempts(prev => {
+                        const newValue = prev + 1;
+                        console.log('🔢 Nuevos intentos fallidos:', newValue);
+                        return newValue;
+                    });
+                }
+                
+                // Verificar si la cuenta está bloqueada
+                if (errorData.code === 'account_locked') {
+                    console.log('🔒 Cuenta bloqueada detectada');
+                    console.log('🔍 DEBUG - error.response.data COMPLETO:', JSON.stringify(error?.response?.data, null, 2));
+                    console.log('🔍 DEBUG - errorData.lock_type RAW:', errorData.lock_type);
+                    console.log('🔍 DEBUG - tipo:', typeof errorData.lock_type);
+                    console.log('🔍 DEBUG - errorData.lock_type === null?:', errorData.lock_type === null);
+                    console.log('🔍 DEBUG - errorData.lock_type === undefined?:', errorData.lock_type === undefined);
+                    setIsLocked(true);
+                    
+                    // Si lock_type es null, undefined o vacío, usar 'automatic'
+                    let lockTypeFromServer = errorData.lock_type;
+                    if (!lockTypeFromServer || lockTypeFromServer === null || lockTypeFromServer === undefined || lockTypeFromServer === '') {
+                        console.warn('⚠️ lock_type es null/undefined/vacío, usando automatic');
+                        lockTypeFromServer = 'automatic';
+                    }
+                    
+                    console.log('🔍 DEBUG - lockTypeFromServer FINAL:', lockTypeFromServer);
+                    console.log('🔍 DEBUG - lockTypeFromServer === "manual"?:', lockTypeFromServer === 'manual');
+                    console.log('🔍 DEBUG - String(lockTypeFromServer):', String(lockTypeFromServer));
+                    
+                    // Normalizar el lockType antes de guardarlo
+                    const lockTypeStr = String(lockTypeFromServer).toLowerCase().trim();
+                    console.log('🔍 DEBUG - lockTypeStr normalizado:', lockTypeStr);
+                    setLockType(lockTypeStr);
+                    
+                    if (lockTypeStr === 'manual') {
+                        console.log('✅ Mostrando mensaje MANUAL');
+                        setLoginError('🔒 Tu cuenta ha sido bloqueada por el administrador.');
+                    } else {
+                        console.log('⚠️ Mostrando mensaje AUTOMÁTICO (lockType=' + lockTypeStr + ')');
+                        setLoginError('🔒 Cuenta bloqueada por múltiples intentos fallidos. Contacte al administrador para desbloquearla.');
+                    }
+                } else if (errorData.code === 'invalid_credentials') {
+                    // Mostrar solo "Credenciales inválidas" sin mencionar intentos (ya tenemos el contador)
+                    setLoginError('❌ Credenciales inválidas');
+                } else if (errorData.code === 'inactive') {
+                    setLoginError('La cuenta está inactiva. Contacte al administrador.');
+                } else {
+                    setLoginError(errorData.message || 'Error iniciando sesión');
+                }
+            } else if (error.response && error.response.status === 401) {
+                console.log('🔢 Error 401 - Incrementando intentos');
+                setFailedAttempts(prev => prev + 1);
+                setLoginError('Credenciales inválidas');
+            } else if (error.response && error.response.status === 403) {
+                console.log('🔢 Error 403 - Incrementando intentos');
+                setFailedAttempts(prev => prev + 1);
+                setLoginError('Acceso denegado. Verifica tus credenciales.');
+            } else {
+                console.log('🔢 Error genérico - Incrementando intentos');
+                setFailedAttempts(prev => prev + 1);
+                setLoginError('Error iniciando sesión. Revisa la consola.');
+            }
         }
     };
     
@@ -397,6 +633,24 @@ const App = () => {
 
     // Ventas (traídas desde backend)
     const [sales, setSales] = useState([]);
+    
+    // Estados para el diálogo de pedidos
+    const [isPedDialogoOpen, setIsPedDialogoOpen] = useState(false);
+    const [isPedDialogoMinimized, setIsPedDialogoMinimized] = useState(false);
+    const [isPedDialogoFullscreen, setIsPedDialogoFullscreen] = useState(false);
+    
+    // Detectar parámetro URL para modo fullscreen
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('pedidos-fullscreen') === 'true') {
+            setIsPedDialogoFullscreen(true);
+            setIsPedDialogoOpen(true);
+            // Si el usuario ya tiene sesión activa, evitar mostrar login
+            if (isLoggedIn) {
+                setCurrentPage('pedidos');
+            }
+        }
+    }, [isLoggedIn]);
 
         // Normalize purchase object returned by server to frontend-friendly shape
         const normalizePurchaseFromServer = (p) => {
@@ -438,13 +692,19 @@ const App = () => {
         }
     };
 
-    // Cargar historial de compras desde el backend al iniciar sesión
+    // Cargar compras desde el backend al iniciar sesión
     useEffect(() => {
         if (isLoggedIn) {
-            fetchPurchases();
-            fetchPurchaseHistory();
+            // Solo Gerente puede ver compras pendientes de aprobación
+            if (userRole === 'Gerente') {
+                fetchPurchases();
+            }
+            // Gerente y Encargado pueden ver el historial de compras
+            if (userRole === 'Gerente' || userRole === 'Encargado') {
+                fetchPurchaseHistory();
+            }
         }
-    }, [isLoggedIn]);
+    }, [isLoggedIn, userRole]);
     // Cargar pedidos desde backend al iniciar sesión (persistencia cross-browser)
     useEffect(() => {
         const fetchOrders = async () => {
@@ -456,8 +716,9 @@ const App = () => {
                     // Normalizar items y campos si es necesario
                     const backendOrders = res.data.map(o => ({
                         id: o.id,
-                        date: o.date,
-                        customerName: o.customer_name || o.customerName || o.customer_name || '',
+                        fecha_para_la_que_se_quiere_el_pedido: o.fecha_para_la_que_se_quiere_el_pedido,
+                        fecha_de_orden_del_pedido: o.fecha_de_orden_del_pedido,
+                        customerName: o.customer_name || o.customerName || '',
                         paymentMethod: o.payment_method || o.paymentMethod || '',
                         items: Array.isArray(o.items) ? o.items.map(it => ({
                             productName: it.product_name || it.productName || '',
@@ -581,8 +842,8 @@ const App = () => {
         return [];
     });
 
-    // Estado para indicar cuando se están sincronizando productos
-    const [isSyncing, setIsSyncing] = useState(false);
+    // Estado para indicar cuando se están cargando productos
+    const [isLoading, setIsLoading] = useState(false);
 
     // useEffect para guardar en localStorage (inventory NO se guarda, products SÍ se guarda)
     // useEffect(() => { saveLS(LS_KEYS.inventory, inventory); }, [inventory]); // DESHABILITADO - inventario se regenera desde products
@@ -610,19 +871,36 @@ const App = () => {
     // Función para cargar usuarios desde el backend
     const loadUsersFromBackend = async () => {
         try {
+            console.log('👥 loadUsersFromBackend llamado - iniciando carga...');
             const response = await api.get('/users/');
             if (response.data) {
-                // Transformar datos del backend para compatibilidad local
+                // Transformar datos del backend para compatibilidad con componentes nuevos y antiguos
                 const backendUsers = response.data.map(user => ({
                     id: user.id,
+                    // Para compatibilidad con componentes antiguos
                     name: user.username,
+                    // Para componentes nuevos con Tailwind
+                    username: user.username,
+                    first_name: user.first_name || '',
+                    last_name: user.last_name || '',
                     email: user.email,
-                    role: user.role ? user.role.name : 'Cajero', // Extraer nombre del rol
+                    // Mantener objeto role completo para componente nuevo
+                    role: user.role || { name: 'Cajero' },
                     is_active: user.is_active,
+                    is_locked: user.is_locked || false, // Incluir estado de bloqueo
+                    failed_login_attempts: user.failed_login_attempts || 0, // Intentos fallidos
+                    locked_at: user.locked_at || null, // Fecha de bloqueo
                     hashedPassword: 'backend-managed' // Password manejado por backend
                 }));
-                setUsers(backendUsers);
-                console.log('✅ Usuarios cargados desde backend:', backendUsers.length);
+                console.log('👥 setUsers llamado con', backendUsers.length, 'usuarios');
+                try {
+                    setUsers(backendUsers);
+                    // setUsers ejecutado exitosamente
+                } catch (error) {
+                    console.error('❌ Error en setUsers:', error);
+                    throw error; // Re-throw para que se pueda investigar
+                }
+                // Usuarios cargados desde backend
             }
         } catch (error) {
             console.error('Error cargando usuarios desde backend:', error);
@@ -643,7 +921,7 @@ const App = () => {
 
         // useEffect para sincronización productos -> inventario
         useEffect(() => {
-                console.log('🔄 SYNC: Sincronizando inventario desde products');
+                // Sincronizar inventario desde products
 
                 // Verificar que products sea un array válido antes de usar map
                 if (!Array.isArray(products)) {
@@ -660,7 +938,9 @@ const App = () => {
                     unit: product.unit,
                     type: product.category || 'Producto',
                     price: product.price,      // Ahora sí se incluye el precio
-                    estado: product.estado     // Y el estado si viene del backend
+                    estado: product.estado,    // Y el estado si viene del backend
+                    low_stock_threshold: product.lowStockThreshold, // Umbral procesado en loadProducts
+                    lowStockThreshold: product.lowStockThreshold    // Compatibilidad con ambos nombres
                 }));
 
                 console.log('🎯 Inventario sincronizado:', newInventory?.length ? `${newInventory.length} productos` : 'Array vacío');
@@ -669,18 +949,48 @@ const App = () => {
         }, [products]);
 
     // Función para cerrar la sesión.
-    const handleLogout = async () => {
+    const handleLogout = async (preserveErrorMessage = false) => {
+        // Llamar al backend para que borre cookies / invalide refresh
+        try {
+            try { await backendLogout(); } catch (e) { /* continuar limpiando aun si falla el backend */ }
+        } catch (e) {
+            // no-op
+        }
+
+        // Limpiar estado local de la app
         setIsLoggedIn(false);
         setUserRole(null);
+        setCurrentUserId(null);
         setCurrentPage('login');
         setEmail('');
         setPassword('');
-        setLoginError('');
+        // Solo limpiar el error si no se solicita preservar
+        if (!preserveErrorMessage) {
+            setLoginError('');
+        }
         setFailedAttempts(0);  // Resetear intentos fallidos
         setIsLocked(false);    // Desbloquear cuenta
+        setLockType('');       // Limpiar tipo de bloqueo
         setShowModal(false);   // Cerrar modal
-    try { await removeAccessToken(); } catch (e) {}
-    try { clearInMemoryToken(); } catch (e) {}
+        
+        // Limpiar estado crítico de sessionStorage al logout
+        sessionStorage.removeItem('failedAttempts');
+        sessionStorage.removeItem('isLocked');
+        sessionStorage.removeItem('lockType');
+        sessionStorage.removeItem('currentEmail');
+        setCurrentEmail('');
+
+        // Limpiar almacenamiento local y token en memoria
+        try { await removeAccessToken(); } catch (e) {}
+        try { clearInMemoryToken(); } catch (e) {}
+        try { localStorage.removeItem('access'); localStorage.removeItem('refresh'); } catch (e) {}
+        try { sessionStorage.clear(); } catch (e) {}
+
+        // Notificar a otras pestañas que se ha cerrado la sesión
+        try {
+            // Usar un valor con timestamp para forzar el evento storage
+            localStorage.setItem('app_logout', String(Date.now()));
+        } catch (e) {}
     };
 
     // Función para manejar la navegación.
@@ -692,6 +1002,131 @@ const App = () => {
     const handleModalClose = () => {
         setShowModal(false);
     };
+
+    // Escuchar eventos de storage para sincronizar logout entre pestañas
+    useEffect(() => {
+        const onStorage = (e) => {
+            if (!e) return;
+            if (e.key === 'app_logout') {
+                // Otra pestaña hizo logout: limpiar estado aquí también
+                try { clearInMemoryToken(); } catch (err) {}
+                try { localStorage.removeItem('access'); localStorage.removeItem('refresh'); } catch (err) {}
+                try { sessionStorage.clear(); } catch (err) {}
+                setIsLoggedIn(false);
+                setUserRole(null);
+                setCurrentPage('login');
+            }
+            // Escuchar evento de bloqueo de cuenta (para otras pestañas)
+            if (e.key === 'account_locked' && e.newValue) {
+                const lockData = JSON.parse(e.newValue);
+                // Si el usuario bloqueado coincide con el actual, cerrar sesión
+                if (lockData.userId && lockData.userId === currentUserId && lockData.lockType === 'manual') {
+                    setLoginError('🔒 Tu cuenta ha sido bloqueada por el administrador.');
+                    handleLogout(true);
+                }
+            }
+            // Escuchar evento de desbloqueo de cuenta (para otras pestañas)
+            if (e.key === 'account_unlocked' && e.newValue) {
+                console.log('🔓 Evento de desbloqueo detectado en storage');
+                const unlockData = JSON.parse(e.newValue);
+                
+                // Solo recargar si el usuario desbloqueado es el usuario ACTUAL
+                if (unlockData.userId && unlockData.userId === currentUserId) {
+                    console.log('✅ El usuario desbloqueado soy YO (storage), recargando...');
+                    // Limpiar TODO PRIMERO
+                    try {
+                        const keys = Object.keys(localStorage);
+                        keys.forEach(key => {
+                            if (key.startsWith('lockType_')) {
+                                localStorage.removeItem(key);
+                            }
+                        });
+                    } catch (err) {}
+                    sessionStorage.clear();
+                    
+                    // Forzar recarga COMPLETA sin cache
+                    window.location.href = window.location.origin + window.location.pathname + '?_t=' + Date.now();
+                } else {
+                    console.log('ℹ️ El usuario desbloqueado NO soy yo (storage), ignorando evento');
+                }
+            }
+        };
+        
+        // Escuchar CustomEvent para bloqueo en la misma pestaña (inmediato)
+        const onUserLocked = (e) => {
+            const lockData = e.detail;
+            if (lockData.userId && lockData.userId === currentUserId && lockData.lockType === 'manual') {
+                setLoginError('🔒 Tu cuenta ha sido bloqueada por el administrador.');
+                handleLogout(true);
+            }
+        };
+        
+        // Escuchar CustomEvent para desbloqueo
+        const onUserUnlocked = (e) => {
+            const unlockData = e.detail;
+            console.log('🔓 CustomEvent de desbloqueo recibido:', unlockData);
+            
+            // Solo recargar si el usuario desbloqueado es el usuario ACTUAL (no el gerente)
+            if (unlockData.userId && unlockData.userId === currentUserId) {
+                console.log('✅ El usuario desbloqueado soy YO, recargando...');
+                // Limpiar TODO localStorage y sessionStorage PRIMERO
+                try {
+                    const keys = Object.keys(localStorage);
+                    keys.forEach(key => {
+                        if (key.startsWith('lockType_')) {
+                            localStorage.removeItem(key);
+                        }
+                    });
+                } catch (e) {}
+                sessionStorage.clear();
+                
+                // Forzar recarga COMPLETA sin cache
+                window.location.href = window.location.origin + window.location.pathname + '?_t=' + Date.now();
+            } else {
+                console.log('ℹ️ El usuario desbloqueado NO soy yo, ignorando evento');
+            }
+        };
+        
+        window.addEventListener('storage', onStorage);
+        window.addEventListener('userAccountLocked', onUserLocked);
+        window.addEventListener('userAccountUnlocked', onUserUnlocked);
+        return () => {
+            window.removeEventListener('storage', onStorage);
+            window.removeEventListener('userAccountLocked', onUserLocked);
+            window.removeEventListener('userAccountUnlocked', onUserUnlocked);
+        };
+    }, [currentUserId]);
+    
+    // Verificar periódicamente si el usuario fue bloqueado (cada 60 segundos como respaldo)
+    useEffect(() => {
+        if (!isLoggedIn) return;
+        
+        const checkUserStatus = async () => {
+            try {
+                const response = await api.get('/users/me/');
+                if (response.data.is_locked) {
+                    // Usuario fue bloqueado, cerrar sesión
+                    const lockTypeFromServer = response.data.lock_type || 'automatic';
+                    if (lockTypeFromServer === 'manual') {
+                        setLoginError('🔒 Tu cuenta ha sido bloqueada por el administrador.');
+                    } else {
+                        setLoginError('🔒 Cuenta bloqueada por múltiples intentos fallidos. Contacte al administrador para desbloquearla.');
+                    }
+                    await handleLogout(true);
+                }
+            } catch (error) {
+                // Si hay error 401 o 403, la sesión ya no es válida
+                if (error?.response?.status === 401 || error?.response?.status === 403) {
+                    await handleLogout();
+                }
+            }
+        };
+        
+        // Verificar cada 3 segundos para detección rápida de bloqueos
+        const interval = setInterval(checkUserStatus, 3000);
+        
+        return () => clearInterval(interval);
+    }, [isLoggedIn]);
      
     const LockedAccountModal = () => (
         <div className="modal-overlay">
@@ -714,8 +1149,16 @@ const App = () => {
     const handleRetryLogin = () => {
         setFailedAttempts(0);
         setIsLocked(false);
+        setLockType('');
         setShowModal(false);
         setLoginError('');
+        
+        // Limpiar estado crítico de sessionStorage al reintentar
+        sessionStorage.removeItem('failedAttempts');
+        sessionStorage.removeItem('isLocked');
+        sessionStorage.removeItem('lockType');
+        sessionStorage.removeItem('currentEmail');
+        setCurrentEmail('');
     };
 
     const loadInventory = async () => {
@@ -737,9 +1180,19 @@ const App = () => {
                 if (response.data && Array.isArray(response.data)) {
                     const normalized = response.data.map(u => ({
                         id: u.id,
+                        // Para compatibilidad con componentes antiguos
                         name: u.username ?? u.name ?? (typeof u === 'string' ? u : ''),
+                        // Para componentes nuevos con Tailwind
+                        username: u.username,
+                        first_name: u.first_name || '',
+                        last_name: u.last_name || '',
                         email: u.email ?? '',
-                        role: (u.role && typeof u.role === 'object') ? (u.role.name ?? String(u.role)) : (u.role ?? 'Cajero'),
+                        // Mantener objeto role completo para componente nuevo
+                        role: u.role || { name: 'Cajero' },
+                        is_active: u.is_active ?? true,
+                        is_locked: u.is_locked ?? false,
+                        failed_login_attempts: u.failed_login_attempts ?? 0,
+                        locked_at: u.locked_at ?? null,
                         hashedPassword: 'backend-managed'
                     }));
                     setUsers(normalized);
@@ -753,10 +1206,11 @@ const App = () => {
             }
         };
 
-    const loadProducts = async () => {
+    const loadProducts = async (showLoading = true) => {
       try {
-        setIsSyncing(true);
-        console.log('🔄 Cargando productos del servidor...');
+        if (showLoading) {
+          setIsLoading(true);
+        }
         const response = await api.get('/products/');
         const serverProducts = response.data;
         
@@ -771,13 +1225,16 @@ const App = () => {
           description: product.description || '',
           status: 'Sincronizado',
           hasSales: false,
-          lowStockThreshold: product.low_stock_threshold || 10
+          lowStockThreshold: product.low_stock_threshold !== undefined && product.low_stock_threshold !== null ? product.low_stock_threshold : 10,
+          highStockMultiplier: product.high_stock_multiplier !== undefined && product.high_stock_multiplier !== null ? product.high_stock_multiplier : 2.0,
+          recipe_yield: product.recipe_yield || 1,
+          is_ingredient: product.is_ingredient || false
         }));
         
         // Solo actualizar si hay diferencias para evitar re-renders innecesarios
         setProducts(prevProducts => {
           if (JSON.stringify(prevProducts) !== JSON.stringify(formattedProducts)) {
-            console.log('✅ Productos actualizados:', `${formattedProducts.length} productos del servidor`);
+            // Productos actualizados exitosamente
             return formattedProducts;
           } else {
             console.log('📋 Productos sin cambios - no se actualiza el estado');
@@ -803,7 +1260,9 @@ const App = () => {
         // Solo actualizar a array vacío si no había productos antes
         setProducts(prevProducts => prevProducts.length > 0 ? prevProducts : []);
       } finally {
-        setIsSyncing(false);
+        if (showLoading) {
+          setIsLoading(false);
+        }
       }
     };
 
@@ -904,71 +1363,131 @@ const App = () => {
       const [emailInput, setEmailInput] = useState('');
       const [passwordInput, setPasswordInput] = useState('');
 
-      const onSubmit = (e) => {
-        e.preventDefault();
-        handleLogin(e, { email: emailInput, password: passwordInput });
+      const onSubmit = async () => {
+        console.log('🔐 Login clicked, calling handleLogin');
+        console.log('🔢 Estado actual failedAttempts:', failedAttempts);
+        await handleLogin(null, { email: emailInput, password: passwordInput });
+        console.log('🔢 Estado después de handleLogin:', failedAttempts);
+      };
+      
+      // Limpiar solo el mensaje de error cuando el usuario empieza a escribir
+      // (pero mantener el contador de intentos visible)
+      const handleEmailChange = (e) => {
+        setEmailInput(e.target.value);
+        // Solo limpiar el mensaje de error, NO los intentos fallidos
+        if (loginError && !isLocked) setLoginError('');
+      };
+      
+      const handlePasswordChange = (e) => {
+        setPasswordInput(e.target.value);
+        // Solo limpiar el mensaje de error, NO los intentos fallidos
+        if (loginError && !isLocked) setLoginError('');
       };
 
       return (
-        <div className="login-container">
-          <h1>Iniciar Sesión</h1>
-          
-          <form onSubmit={onSubmit}>
-            <div className="input-group">
-              <label htmlFor="email">Correo Electrónico</label>
-              <input
-                type="email"
-                id="email"
-                value={emailInput}
-                onChange={(e) => setEmailInput(e.target.value)}
-                placeholder="ejemplo@email.com"
-                required
-                autoComplete="email"
-                disabled={isLocked}
-              />
-            </div>
-            <div className="input-group">
-              <label htmlFor="password">Contraseña</label>
-              <input
-                type="password"
-                id="password"
-                value={passwordInput}
-                onChange={(e) => setPasswordInput(e.target.value)}
-                placeholder="••••••••"
-                required
-                autoComplete="current-password"
-                disabled={isLocked}
-              />
-            </div>
+        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-blue-100 p-3 sm:p-6 md:p-8">
+          <div className="w-full max-w-[95%] sm:max-w-md md:max-w-lg lg:max-w-xl bg-white rounded-xl sm:rounded-2xl shadow-2xl p-4 sm:p-6 md:p-8 lg:p-10 border border-gray-100 overflow-hidden">
+            <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-bold text-center text-gray-800 mb-4 sm:mb-6 md:mb-8 break-words">
+              🔐 Iniciar Sesión
+            </h1>
             
-            {/* Mostrar mensaje de error */}
-            <p className={loginError ? 'error-message' : 'error-message hidden'}>
-              {loginError}
-            </p>
-            
-            {/* Mostrar contador de intentos */}
-            {failedAttempts > 0 && !isLocked && (
-              <p className="attempts-message">
-                Intentos fallidos: {failedAttempts} de {maxAttempts}
-              </p>
-            )}
-            
-            {/* Mostrar mensaje de bloqueo */}
-            {isLocked && (
-              <p className="lock-message">
-                Tu cuenta ha sido bloqueada. Contacta al administrador.
-              </p>
-            )}
-            
-            {/* Formulario de login - sin funciones de test en producción */}
-            <button 
-              type="submit" 
-              className="login-button" 
-              disabled={isLocked}
-            >
-              {isLocked ? 'Cuenta Bloqueada' : 'Iniciar Sesión'}
-            </button>
-          </form>
+            <form onSubmit={(e) => { e.preventDefault(); onSubmit(); }} className="space-y-4 sm:space-y-5 md:space-y-6">
+              <div className="space-y-1.5 sm:space-y-2 min-w-0">
+                <label 
+                  htmlFor="email" 
+                  className="block text-xs sm:text-sm md:text-base font-semibold text-gray-700 truncate"
+                >
+                  Correo Electrónico
+                </label>
+                <input
+                  type="email"
+                  id="email"
+                  value={emailInput}
+                  onChange={handleEmailChange}
+                  onFocus={() => {
+                    // NO limpiar el mensaje si es bloqueo manual
+                    if (!(isLocked && lockType === 'manual')) {
+                      setLoginError('');
+                    }
+                  }}
+                  placeholder="ejemplo@email.com"
+                  required
+                  autoComplete="email"
+                  className="w-full min-w-0 px-3 py-2.5 sm:px-4 sm:py-3 md:py-3.5 lg:py-4 text-sm sm:text-base border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-400 overflow-hidden text-ellipsis"
+                />
+              </div>
+              
+              <div className="space-y-1.5 sm:space-y-2 min-w-0">
+                <label 
+                  htmlFor="password" 
+                  className="block text-xs sm:text-sm md:text-base font-semibold text-gray-700 truncate"
+                >
+                  Contraseña
+                </label>
+                <input
+                  type="password"
+                  id="password"
+                  value={passwordInput}
+                  onChange={handlePasswordChange}
+                  onFocus={() => {
+                    // NO limpiar el mensaje si es bloqueo manual
+                    if (!(isLocked && lockType === 'manual')) {
+                      setLoginError('');
+                    }
+                  }}
+                  placeholder="••••••••"
+                  required
+                  autoComplete="current-password"
+                  className="w-full min-w-0 px-3 py-2.5 sm:px-4 sm:py-3 md:py-3.5 lg:py-4 text-sm sm:text-base border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-400 overflow-hidden text-ellipsis"
+                />
+              </div>
+              
+              {/* Mostrar contador de intentos (SIEMPRE visible, permanente) */}
+              {!isLocked && (
+                <div className={`my-2 sm:my-3 p-2.5 sm:p-3 md:p-4 rounded-lg text-center text-xs sm:text-sm md:text-base transition-all duration-200 overflow-hidden ${
+                  failedAttempts > 0 
+                    ? 'bg-yellow-50 border-2 border-yellow-400 text-yellow-800 font-bold' 
+                    : 'bg-gray-50 border border-gray-300 text-gray-600'
+                }`}>
+                  <span className="whitespace-nowrap overflow-hidden text-ellipsis block">
+                    {failedAttempts > 0 ? '⚠️ ' : ''}Intentos fallidos: {failedAttempts} de {maxAttempts}
+                  </span>
+                </div>
+              )}
+              
+              {/* Mostrar mensaje de error o bloqueo dinámicamente según el tipo */}
+              {loginError && (
+                <div className={`my-2 sm:my-3 p-3 sm:p-4 md:p-5 rounded-lg text-center text-xs sm:text-sm md:text-base overflow-hidden ${
+                  isLocked 
+                    ? 'bg-red-50 border-2 border-red-500 text-red-600 font-bold' 
+                    : 'bg-red-50 border border-red-300 text-red-600'
+                }`}>
+                  <span className="block break-words">
+                    {loginError}
+                  </span>
+                </div>
+              )}
+              
+              {/* Formulario de login - sin funciones de test en producción */}
+              <button 
+                type="button"
+                onClick={onSubmit}
+                className="w-full py-2.5 sm:py-3 md:py-3.5 lg:py-4 px-4 sm:px-6 text-sm sm:text-base md:text-lg bg-gradient-to-r from-blue-600 to-blue-700 text-white font-semibold rounded-lg shadow-md hover:from-blue-700 hover:to-blue-800 hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 overflow-hidden whitespace-nowrap text-ellipsis"
+              >
+                ✓ Iniciar Sesión
+              </button>
+              
+              <div className="mt-3 sm:mt-4 md:mt-5 text-center overflow-hidden">
+                <button 
+                  type="button" 
+                  onClick={() => setCurrentPage('forgot-password')}
+                  className="text-blue-600 hover:text-blue-800 text-xs sm:text-sm md:text-base font-medium underline hover:no-underline transition-all duration-200 truncate inline-block max-w-full"
+                >
+                  ¿Olvidaste tu contraseña?
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       );
     };
@@ -979,10 +1498,6 @@ const App = () => {
 
         return (
             <nav className="navbar">
-                <div className="user-info">
-                    <span>Rol: {userRole}</span>
-                    <button onClick={handleLogout} className="logout-button">Cerrar Sesión</button>
-                </div>
                 <ul className="nav-list">
                     {itemsToShow.map(item => (
                         <li key={item}>
@@ -992,61 +1507,42 @@ const App = () => {
                         </li>
                     ))}
                 </ul>
+                {/* Mostrar botón de cerrar sesión solo si está autenticado y no estamos en la pantalla pública de 'forgot-password' */}
+                {(isLoggedIn && userRole && currentPage !== 'forgot-password') && (
+                    <button onClick={handleLogout} className="logout-button">Cerrar Sesión</button>
+                )}
             </nav>
         );
     };
 
-    const ClientOrders = () => (
-        <div className="management-container">
-            <h2>Pedidos de Clientes</h2>
-            {orders.length === 0 ? (
-                <p>No hay pedidos para mostrar.</p>
-            ) : (
-                <ul className="list-container">
-                    {orders.map(order => (
-                        <li key={order.id} className="list-item">
-                            <div className="order-header">
-                                <strong>ID: {order.id}</strong>
-                                <span>Cliente: {order.customerName}</span>
-                                <span>Fecha: {new Date(order.date).toLocaleDateString()}</span>
-                            </div>
-                            <div className="order-details">
-                                <p><strong>Estado:</strong> {order.status}</p>
-                                <p><strong>Total:</strong> ${safeToFixed(order.totalAmount)}</p>
-                            </div>
-                            <div className="order-items">
-                                <strong>Items:</strong>
-                                <ul>
-                                    {order.items.map((item, index) => (
-                                        <li key={index}>
-                                            {item.productName} (x{item.quantity}) - ${safeToFixed(item.total)}
-                                        </li>
-                                    ))}
-                                </ul>
-                            </div>
-                            {order.notes && <div className="order-notes"><strong>Notas:</strong> {order.notes}</div>}
-                        </li>
-                    ))}
-                </ul>
-            )}
-        </div>
-    );
+
 
     // Componente del tablero (Dashboard).
     const Dashboard = () => {
+        // Estados para manejar el colapso de las secciones
+        const [showSuppliesAlerts, setShowSuppliesAlerts] = useState(false);
+        const [showProductsAlerts, setShowProductsAlerts] = useState(false);
+
         // Obtener productos e insumos con stock bajo según su umbral personalizado
-        const lowStockItems = products.filter(product => 
-            product.stock < (product.lowStockThreshold || 10)
-        );
+        // Comparar en la misma unidad base (gramos/ml/unidades)
+        const lowStockItems = products.filter(product => {
+            const threshold = product.lowStockThreshold || 10;
+            // El stock ya está en unidad base, el threshold también debe estar en unidad base
+            // (si el backend lo guardó correctamente)
+            return product.stock < threshold;
+        });
 
         // Separar productos e insumos para mejor organización
         const lowStockProducts = lowStockItems.filter(item => item.category === 'Producto');
         const lowStockSupplies = lowStockItems.filter(item => item.category === 'Insumo');
 
+        // Calcular total de alertas
+        const totalAlerts = lowStockProducts.length + lowStockSupplies.length;
+
         const formatStockDisplay = (stock, unit) => {
             const stockNum = parseFloat(stock);
             if (isNaN(stockNum)) {
-                return `0 unidades`;
+                return `0 unid`;
             }
 
             let displayValue;
@@ -1066,7 +1562,7 @@ const App = () => {
                 displayUnit = 'litros';
             } else {
                 displayValue = stockNum;
-                displayUnit = 'unidades';
+                displayUnit = 'unid';
             }
 
             // Format number to remove trailing zeros from decimals, up to 3 decimal places
@@ -1075,234 +1571,119 @@ const App = () => {
             return `${formattedValue} ${displayUnit}`;
         };
 
+        const formatThresholdDisplay = (threshold, unit) => {
+            const thresholdNum = parseFloat(threshold) || 10;
+            if (isNaN(thresholdNum)) {
+                return `10`;
+            }
+
+            let displayValue;
+
+            if (unit === 'g') {
+                displayValue = thresholdNum / 1000;
+            } else if (unit === 'ml') {
+                displayValue = thresholdNum / 1000;
+            } else {
+                displayValue = thresholdNum;
+            }
+
+            return Number(displayValue.toFixed(3));
+        };
+
         return (
             <div className="dashboard-container">
-                <h2>Dashboard de {userRole}</h2>
+                <div className="dashboard-header">
+                    <h2>Dashboard de {userRole}</h2>   
+                       {/* 
+                //totalAlerts > 0 && (
+                //  <div className="total-alerts-badge">
+                //    <span className="alert-icon">⚠️</span>
+                //    <span className="alert-text">TOTAL ALERTAS</span>
+                //    <span className="alert-count">{totalAlerts}</span>
+                //  </div>
+                //)
+                */}
+            </div>
+    
+
                 {['Gerente', 'Encargado', 'Panadero', 'Cajero'].includes(userRole) && (
-                    lowStockItems.length > 0 && (
-                        <div className="dashboard-alerts">
-                            <h3>⚠️ Alerta de Stock Bajo</h3>
-                            
-                            {lowStockProducts.length > 0 && (
-                                <div className="alert-section">
-                                    <h4>📦 Productos con Stock Bajo:</h4>
-                                    <ul className="alert-list">
-                                        {lowStockProducts.map(item => (
-                                            <li key={item.id} className="alert-item">
-                                                <strong>{item.name}</strong>: ¡Solo quedan {formatStockDisplay(item.stock, item.unit)}! (Umbral: {item.lowStockThreshold || 10})
-                                            </li>
-                                        ))}
-                                    </ul>
-                                </div>
-                            )}
-                            
-                            {lowStockSupplies.length > 0 && (
-                                <div className="alert-section">
-                                    <h4>🧾 Insumos con Stock Bajo:</h4>
-                                    <ul className="alert-list">
+                    <div className="alerts-wrapper">
+                        {/* Sección de Insumos Faltantes */}
+                        {lowStockSupplies.length > 0 && (
+                            <div className="alert-category">
+                                <button 
+                                    className="alert-category-header"
+                                    onClick={() => setShowSuppliesAlerts(!showSuppliesAlerts)}
+                                >
+                                    <div className="header-left">
+                                        
+                                        <span className="category-title">Insumos Faltantes o con bajo Stock</span>
+                                        <span className="category-count">{lowStockSupplies.length}</span>
+                                    </div>
+                                    <span className={`collapse-icon ${showSuppliesAlerts ? 'open' : ''}`}>▼</span>
+                                </button>
+                                
+                                {showSuppliesAlerts && (
+                                    <div className="alert-grid">
                                         {lowStockSupplies.map(item => (
-                                            <li key={item.id} className="alert-item">
-                                                <strong>{item.name}</strong>: ¡Solo quedan {formatStockDisplay(item.stock, item.unit)}! (Umbral: {item.lowStockThreshold || 10})
-                                            </li>
+                                            <div key={item.id} className="alert-card alert-card-red">
+                                                <div className="alert-card-icon">⚠️</div>
+                                                <div className="alert-card-content">
+                                                    <h4 className="alert-card-title">{item.name}</h4>
+                                                    <div className="alert-card-stock">
+                                                        <span className="stock-value">{formatStockDisplay(item.stock, item.unit)}</span>
+                                                        <span className="stock-separator">·</span>
+                                                        <span className="stock-min">Mín: {formatThresholdDisplay(item.lowStockThreshold, item.unit)}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
                                         ))}
-                                    </ul>
-                                </div>
-                            )}
-                        </div>
-                    )
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Sección de Productos Bajo Mínimo */}
+                        {lowStockProducts.length > 0 && (
+                            <div className="alert-category">
+                                <button 
+                                    className="alert-category-header"
+                                    onClick={() => setShowProductsAlerts(!showProductsAlerts)}
+                                >
+                                    <div className="header-left">
+                                        
+                                        <span className="category-title">Productos Faltantes o con bajo Stock</span>
+                                        <span className="category-count">{lowStockProducts.length}</span>
+                                    </div>
+                                    <span className={`collapse-icon ${showProductsAlerts ? 'open' : ''}`}>▼</span>
+                                </button>
+                                
+                                {showProductsAlerts && (
+                                    <div className="alert-grid">
+                                        {lowStockProducts.map(item => (
+                                            <div key={item.id} className="alert-card alert-card-red">
+                                                <div className="alert-card-icon">⚠️</div>
+                                                <div className="alert-card-content">
+                                                    <h4 className="alert-card-title">{item.name}</h4>
+                                                    <div className="alert-card-stock">
+                                                        <span className="stock-value">{formatStockDisplay(item.stock, item.unit)}</span>
+                                                        <span className="stock-separator">·</span>
+                                                        <span className="stock-min">Mín: {formatThresholdDisplay(item.lowStockThreshold, item.unit)}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
                 )}
                 
                 <div className="info-section">
                     <h3>Información General</h3>
-                    <p>Bienvenido al sistema de gestión de churrería. Utiliza el menú superior para navegar por las diferentes funcionalidades.</p>
+                    <p className='textoBienvenida'>Bienvenido al sistema de gestión de churrería. Utiliza el menú superior para navegar por las diferentes funcionalidades.</p>
                 </div>
-            </div>
-        );
-    };
-
-    // Componente de la interfaz de gestión de usuarios (solo para Gerente).
-    const UserManagement = () => {
-        const [showAddUser, setShowAddUser] = useState(false);
-        const [editingUser, setEditingUser] = useState(null); // Usuario en edición
-        const [newPassword, setNewPassword] = useState(''); // Nuevo estado para la contraseña
-        const [newUser, setNewUser] = useState({ name: '', email: '', role: 'Cajero', password: '' });
-        const [message, setMessage] = useState('');
-
-        const handleAddUser = async (e) => {
-            e.preventDefault();
-            if (!newUser.name || !newUser.email || !newUser.password) {
-                setMessage('Error: Todos los campos son obligatorios.');
-                return;
-            }
-            const passwordError = validatePassword(newUser.password);
-            if (passwordError) {
-                setMessage(`Error de contraseña: ${passwordError}`);
-                return;
-            }
-            const userExists = users.some(u => u.email === newUser.email);
-            if (userExists) {
-                setMessage('Error: El email ya está registrado.');
-                return;
-            }
-            try {
-                await api.post('/users/', { 
-                    username: newUser.name,
-                    email: newUser.email,
-                    password: newUser.password,
-                    role: newUser.role 
-                });
-                await loadUsersFromBackend();
-                setNewUser({ name: '', email: '', role: 'Cajero', password: '' });
-                setShowAddUser(false);
-                setMessage('✅ Usuario creado exitosamente.');
-            } catch (error) {
-                setMessage(error.response?.data?.email?.[0] || 'Error: No se pudo crear el usuario.');
-            }
-        };
-
-        const handleUpdateUser = async (e) => {
-            e.preventDefault();
-            if (!editingUser) return;
-
-            // Validar contraseña si se ha ingresado una nueva
-            if (newPassword && validatePassword(newPassword)) {
-                setMessage(`Error de contraseña: ${validatePassword(newPassword)}`);
-                return;
-            }
-
-            try {
-                const payload = {
-                    username: editingUser.name,
-                    email: editingUser.email,
-                    // Enviar role_id si es posible (el serializer espera role_id para update)
-                    // Buscamos el id del rol seleccionado en `roles` (roles puede ser array de objetos o strings)
-                    // Si no encontramos id, como fallback enviamos el nombre en `role_name` para compatibilidad.
-                };
-
-                // Añadir contraseña al payload solo si se ha ingresado una nueva
-                if (newPassword) {
-                    payload.password = newPassword;
-                }
-
-                // Resolver role -> role_id
-                try {
-                    const roleObj = (roles || []).find(r => (typeof r === 'string' ? r === editingUser.role : (r.name === editingUser.role)));
-                    if (roleObj) {
-                        // Si roleObj es string no tiene id; si es objeto, usar id
-                        if (typeof roleObj === 'object' && roleObj.id) {
-                            payload.role_id = roleObj.id;
-                        } else if (typeof roleObj === 'string') {
-                            // fallback: enviar role_name para que el backend lo maneje si lo soporta
-                            payload.role_name = roleObj;
-                        }
-                    } else if (editingUser.role) {
-                        // No encontramos el rol en la lista; enviar role_name como fallback
-                        payload.role_name = editingUser.role;
-                    }
-
-                    await api.patch(`/users/${editingUser.id}/`, payload);
-                } catch (err) {
-                    console.error('Error resolviendo role_id antes de actualizar usuario:', err);
-                    await api.patch(`/users/${editingUser.id}/`, payload);
-                }
-                await loadUsersFromBackend();
-                setEditingUser(null);
-                setNewPassword(''); // Limpiar el campo de contraseña
-                setMessage('✅ Datos del usuario actualizados.');
-            } catch (error) {
-                setMessage('Error: No se pudo actualizar el usuario.');
-                console.error("Update user error:", error.response?.data || error.message);
-            }
-        };
-
-        const handleDeleteUser = async (userId) => {
-            const userToDelete = users.find(u => u.id === userId);
-            if (!userToDelete || (userToDelete.role === 'Gerente') || !window.confirm(`¿Seguro que quieres eliminar a ${userToDelete.name}?`)) return;
-            try {
-                await api.delete(`/users/${userId}/`);
-                await loadUsersFromBackend();
-                setMessage('✅ Usuario eliminado.');
-            } catch (error) {
-                setMessage('Error eliminando usuario.');
-            }
-        };
-
-        const startEditing = (user) => {
-            setEditingUser({ ...user });
-            setNewPassword('');
-            setShowAddUser(false);
-        };
-
-        const editUserForm = () => (
-            <form className="form-container" onSubmit={handleUpdateUser}>
-                <h3>Editando a {editingUser.name}</h3>
-                <input type="text" value={editingUser.name} onChange={e => setEditingUser({ ...editingUser, name: e.target.value })} placeholder="Nombre Completo" required />
-                <input type="email" value={editingUser.email} onChange={e => setEditingUser({ ...editingUser, email: e.target.value })} placeholder="Email" required />
-                <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="Nueva Contraseña (dejar en blanco para no cambiar)" />
-                <select
-                    value={editingUser.role || ''}
-                    onChange={e => setEditingUser({ ...editingUser, role: e.target.value })}
-                >
-                    <option value="" disabled>Seleccionar rol...</option>
-                    {(() => {
-                        const parsed = (roles || []).map(r => (typeof r === 'string' ? r : (r.name || r)));
-                        if (editingUser && editingUser.role && !parsed.includes(editingUser.role)) {
-                            parsed.unshift(editingUser.role);
-                        }
-                        return parsed.map(name => <option key={name} value={name}>{name}</option>);
-                    })()}
-                </select>
-                <div className="button-group">
-                    <button type="submit" className="action-button primary">Actualizar Datos</button>
-                    <button type="button" className="action-button secondary" onClick={() => { setEditingUser(null); setNewPassword(''); }}>Cancelar</button>
-                </div>
-            </form>
-        );
-
-        const addUserForm = () => (
-            <form className="form-container" onSubmit={handleAddUser}>
-                <h3>Registrar Usuario</h3>
-                <input type="text" value={newUser.name} onChange={e => setNewUser({ ...newUser, name: e.target.value })} placeholder="Nombre Completo" required />
-                <input type="email" value={newUser.email} onChange={e => setNewUser({ ...newUser, email: e.target.value })} placeholder="Email" required />
-                <input type="password" value={newUser.password} onChange={e => setNewUser({ ...newUser, password: e.target.value })} placeholder="Contraseña" required />
-                <select
-                    value={newUser.role}
-                    onChange={e => setNewUser({ ...newUser, role: e.target.value })}
-                >
-                    {(() => {
-                        const parsed = (roles || []).map(r => (typeof r === 'string' ? r : (r.name || r)));
-                        return parsed.filter(n => n !== 'Gerente').map(name => (
-                            <option key={name} value={name}>{name}</option>
-                        ));
-                    })()}
-                </select>
-                <div className="button-group">
-                    <button type="submit" className="action-button primary">Crear Usuario</button>
-                    <button type="button" className="action-button secondary" onClick={() => setShowAddUser(false)}>Cancelar</button>
-                </div>
-            </form>
-        );
-
-        return (
-            <div className="management-container">
-                <h2>Gestión de Usuarios</h2>
-                {message && <p className="message">{message}</p>}
-                {editingUser ? editUserForm() : (showAddUser ? addUserForm() : <button className="main-button" onClick={() => setShowAddUser(true)}>Registrar Nuevo Usuario</button>)}
-                <h3>Usuarios Existentes ({users.length})</h3>
-                <ul className="list-container">
-                    {users.map(user => (
-                        <li key={user.id} className="list-item">
-                            <div className="user-info-container">
-                                <div><strong>{user.name}</strong> ({user.role})</div>
-                                <div className="user-email">{user.email}</div>
-                            </div>
-                            <div className="button-group">
-                                <button onClick={() => startEditing(user)} className="edit-button">Editar</button>
-                                <button onClick={() => handleDeleteUser(user.id)} className="delete-button">Eliminar</button>
-                            </div>
-                        </li>
-                    ))}
-                </ul>
             </div>
         );
     };
@@ -1314,6 +1695,18 @@ const App = () => {
         // productId en vez de nombre, quantity como string hasta validar, reason texto
         const [change, setChange] = useState({ productId: '', quantity: '', reason: '' });
         const [confirmOpen, setConfirmOpen] = useState(false);
+        const [activeTab, setActiveTab] = useState('productos'); // 'productos' o 'insumos'
+        
+        // Estados para filtros de productos
+        const [productNameFilter, setProductNameFilter] = useState('');
+        const [productStockFilter, setProductStockFilter] = useState('');
+        const [productStockOp, setProductStockOp] = useState('equals');
+        
+        // Estados para filtros de insumos
+        const [insumoNameFilter, setInsumoNameFilter] = useState('');
+        const [insumoStockFilter, setInsumoStockFilter] = useState('');
+        const [insumoStockOp, setInsumoStockOp] = useState('equals');
+        const [insumoStockUnit, setInsumoStockUnit] = useState('unidades');
 
         const handleRegisterChange = (e) => {
             if (e && typeof e.preventDefault === 'function') e.preventDefault();
@@ -1386,59 +1779,292 @@ const App = () => {
 
         return (
             <div className="inventory-container">
-                <h2>Inventario</h2>
-                <h3>Consultar Inventario</h3>
-                
-                <div className="inventory-categories">
-                    <h4>Productos</h4>
-                    <ul className="list-container">
-                        {inventory
-                            .filter(item => item.type === 'Producto')
-                            .map(item => {
-                                let stockDisplay;
-                                const stockNum = parseFloat(item.stock);
-                                if (item.unit === 'g') {
-                                    stockDisplay = `${parseFloat((stockNum / 1000).toFixed(3))} kilos`;
-                                } else if (item.unit === 'ml') {
-                                    stockDisplay = `${parseFloat((stockNum / 1000).toFixed(3))} litros`;
-                                } else {
-                                    stockDisplay = `${stockNum} unidades`;
-                                }
-                                return (
-                                    <li key={item.id} className="list-item">
-                                        <span className="inventory-name">{item.name}</span>
-                                        <span className="inventory-stock">{stockDisplay}</span>
-                                    </li>
-                                );
-                            })}
-                    </ul>
-                    
-                    <h4>Insumos</h4>
-                    <ul className="list-container">
-                        {inventory
-                            .filter(item => item.type === 'Insumo')
-                            .map(item => {
-                                let stockDisplay;
-                                const stockNum = parseFloat(item.stock);
-                                if (item.unit === 'g') {
-                                    stockDisplay = `${parseFloat((stockNum / 1000).toFixed(3))} kilos`;
-                                } else if (item.unit === 'ml') {
-                                    stockDisplay = `${parseFloat((stockNum / 1000).toFixed(3))} litros`;
-                                } else {
-                                    stockDisplay = `${stockNum} unidades`;
-                                }
-                                return (
-                                    <li key={item.id} className="list-item">
-                                        <span className="inventory-name">{item.name}</span>
-                                        <span className="inventory-stock">{stockDisplay}</span>
-                                    </li>
-                                );
-                            })}
-                    </ul>
+                <div className="inventory-header">
+                    <h2>Control de Inventario</h2>
+                    <div className="inventory-tabs">
+                        <div className='inventory-tab-producto'>
+
+                            <button 
+                                className={`inventory-tab-button ${activeTab === 'productos' ? 'active' : ''}`}
+                                onClick={() => setActiveTab('productos')}
+                            >
+                                Productos
+                            </button>
+                        </div>
+
+                        <div className='inventory-tab-insumo'>
+                            <button 
+                                className={`inventory-tab-button ${activeTab === 'insumos' ? 'active' : ''}`}
+                                onClick={() => setActiveTab('insumos')}
+                            >
+                                Insumos
+                           </button>
+                        </div> 
+                    </div>
                 </div>
+                
+                {activeTab === 'productos' && (
+                    <div className="tab-content">
+                        {/* Filtros para productos */}
+                        <div className="inventory-filters">
+                            <h4>FILTROS DE BÚSQUEDA</h4>
+                            
+                            <div className="inventory-filters-row">
+                                <div className="filter-row">
+                                    <label>Nombre del Producto</label>
+                                    <input
+                                        type="text"
+                                        value={productNameFilter}
+                                        onChange={e => setProductNameFilter(e.target.value)}
+                                        placeholder="Buscar por nombre..."
+                                    />
+                                </div>
+                                
+                                <div className="filter-row">
+                                    <label>Cantidad en Stock</label>
+                                    <select value={productStockOp} onChange={e => setProductStockOp(e.target.value)}>
+                                        <option value="equals">Es igual</option>
+                                        <option value="gt">Mayor que</option>
+                                        <option value="gte">Mayor o igual</option>
+                                        <option value="lt">Menor que</option>
+                                        <option value="lte">Menor o igual</option>
+                                    </select>
+                                    <input
+                                        type="number"
+                                        step="0.001"
+                                        value={productStockFilter}
+                                        onChange={e => setProductStockFilter(e.target.value)}
+                                        placeholder="Cant..."
+                                    />
+                                    <span className="unit-label">unidades</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div className="inventory-results">
+                            <p className="results-count">
+                                Mostrando {inventory.filter(item => {
+                                    if (item.type !== 'Producto') return false;
+                                    if (productNameFilter && !item.name.toLowerCase().includes(productNameFilter.toLowerCase())) return false;
+                                    if (productStockFilter) {
+                                        const filterValue = parseFloat(productStockFilter);
+                                        const itemStock = parseFloat(item.stock);
+                                        if (productStockOp === 'equals' && itemStock !== filterValue) return false;
+                                        if (productStockOp === 'gt' && itemStock <= filterValue) return false;
+                                        if (productStockOp === 'gte' && itemStock < filterValue) return false;
+                                        if (productStockOp === 'lt' && itemStock >= filterValue) return false;
+                                        if (productStockOp === 'lte' && itemStock > filterValue) return false;
+                                    }
+                                    return true;
+                                }).length} resultados
+                            </p>
+                        </div>
+                        
+                        <div className="inventory-grid">
+                            {inventory
+                                .filter(item => {
+                                    // Filtro por tipo
+                                    if (item.type !== 'Producto') return false;
+                                    
+                                    // Filtro por nombre
+                                    if (productNameFilter && !item.name.toLowerCase().includes(productNameFilter.toLowerCase())) {
+                                        return false;
+                                    }
+                                    
+                                    // Filtro por stock
+                                    if (productStockFilter) {
+                                        const filterValue = parseFloat(productStockFilter);
+                                        const itemStock = parseFloat(item.stock);
+                                        
+                                        if (productStockOp === 'equals' && itemStock !== filterValue) return false;
+                                        if (productStockOp === 'gt' && itemStock <= filterValue) return false;
+                                        if (productStockOp === 'gte' && itemStock < filterValue) return false;
+                                        if (productStockOp === 'lt' && itemStock >= filterValue) return false;
+                                        if (productStockOp === 'lte' && itemStock > filterValue) return false;
+                                    }
+                                    
+                                    return true;
+                                })
+                                .map(item => {
+                                    let stockDisplay;
+                                    const stockNum = parseFloat(item.stock);
+                                    if (item.unit === 'g') {
+                                        stockDisplay = `${parseFloat((stockNum / 1000).toFixed(3))} kilos`;
+                                    } else if (item.unit === 'ml') {
+                                        stockDisplay = `${parseFloat((stockNum / 1000).toFixed(3))} litros`;
+                                    } else {
+                                        stockDisplay = `${stockNum} unidades`;
+                                    }
+                                    
+                                    const isLowStock = item.stock < (item.lowStockThreshold || item.low_stock_threshold || 0);
+                                    
+                                    return (
+                                        <div key={item.id} className={`inventory-card ${isLowStock ? 'low-stock' : ''}`}>
+                                            <div className="inventory-card-content">
+                                                <h4 className="inventory-card-title">{item.name}</h4>
+                                                <div className="inventory-card-stock">
+                                                    <span className="stock-label">Stock:</span>
+                                                    <span className={`stock-value ${isLowStock ? 'low' : ''}`}>{stockDisplay}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                        </div>
+                    </div>
+                )}
+                
+                {activeTab === 'insumos' && (
+                    <div className="tab-content">
+                        {/* Filtros para insumos */}
+                        <div className="inventory-filters">
+                            <h4>FILTROS DE BÚSQUEDA</h4>
+                            
+                            <div className="inventory-filters-row">
+                                <div className="filter-row">
+                                    <label>Nombre del Insumo</label>
+                                    <input
+                                        type="text"
+                                        value={insumoNameFilter}
+                                        onChange={e => setInsumoNameFilter(e.target.value)}
+                                        placeholder="Buscar por nombre..."
+                                    />
+                                </div>
+                                
+                                <div className="filter-row">
+                                    <label>Cantidad en Stock</label>
+                                    <select value={insumoStockOp} onChange={e => setInsumoStockOp(e.target.value)}>
+                                        <option value="equals">Es igual</option>
+                                        <option value="gt">Mayor que</option>
+                                        <option value="gte">Mayor o igual</option>
+                                        <option value="lt">Menor que</option>
+                                        <option value="lte">Menor o igual</option>
+                                    </select>
+                                    <input
+                                        type="number"
+                                        step="0.001"
+                                        value={insumoStockFilter}
+                                        onChange={e => setInsumoStockFilter(e.target.value)}
+                                        placeholder="Cant..."
+                                    />
+                                    <select 
+                                        value={insumoStockUnit} 
+                                        onChange={e => setInsumoStockUnit(e.target.value)}
+                                        className="unit-selector"
+                                    >
+                                        <option value="unidades">unidades</option>
+                                        <option value="Kg">Kg</option>
+                                        <option value="L">L</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div className="inventory-results">
+                            <p className="results-count">
+                                Mostrando {inventory.filter(item => {
+                                    if (item.type !== 'Insumo') return false;
+                                    if (insumoNameFilter && !item.name.toLowerCase().includes(insumoNameFilter.toLowerCase())) return false;
+                                    if (insumoStockFilter) {
+                                        const filterValue = parseFloat(insumoStockFilter);
+                                        let itemStock = parseFloat(item.stock);
+                                        if (insumoStockUnit === 'Kg' && item.unit === 'g') {
+                                            itemStock = itemStock / 1000;
+                                        } else if (insumoStockUnit === 'L' && item.unit === 'ml') {
+                                            itemStock = itemStock / 1000;
+                                        } else if (insumoStockUnit === 'Kg' && item.unit !== 'g') {
+                                            return false;
+                                        } else if (insumoStockUnit === 'L' && item.unit !== 'ml') {
+                                            return false;
+                                        } else if (insumoStockUnit === 'unidades' && (item.unit === 'g' || item.unit === 'ml')) {
+                                            return false;
+                                        }
+                                        if (insumoStockOp === 'equals' && Math.abs(itemStock - filterValue) > 0.001) return false;
+                                        if (insumoStockOp === 'gt' && itemStock <= filterValue) return false;
+                                        if (insumoStockOp === 'gte' && itemStock < filterValue) return false;
+                                        if (insumoStockOp === 'lt' && itemStock >= filterValue) return false;
+                                        if (insumoStockOp === 'lte' && itemStock > filterValue) return false;
+                                    }
+                                    return true;
+                                }).length} resultados
+                            </p>
+                        </div>
+                        
+                        <div className="inventory-grid">
+                            {inventory
+                                .filter(item => {
+                                    // Filtro por tipo
+                                    if (item.type !== 'Insumo') return false;
+                                    
+                                    // Filtro por nombre
+                                    if (insumoNameFilter && !item.name.toLowerCase().includes(insumoNameFilter.toLowerCase())) {
+                                        return false;
+                                    }
+                                    
+                                    // Filtro por stock
+                                    if (insumoStockFilter) {
+                                        const filterValue = parseFloat(insumoStockFilter);
+                                        let itemStock = parseFloat(item.stock);
+                                        
+                                        // Convertir el stock del item según la unidad seleccionada
+                                        if (insumoStockUnit === 'Kg' && item.unit === 'g') {
+                                            // Convertir de gramos a kilos
+                                            itemStock = itemStock / 1000;
+                                        } else if (insumoStockUnit === 'L' && item.unit === 'ml') {
+                                            // Convertir de mililitros a litros
+                                            itemStock = itemStock / 1000;
+                                        } else if (insumoStockUnit === 'Kg' && item.unit !== 'g') {
+                                            // Si buscamos en Kg pero el item no está en gramos, no coincide
+                                            return false;
+                                        } else if (insumoStockUnit === 'L' && item.unit !== 'ml') {
+                                            // Si buscamos en L pero el item no está en ml, no coincide
+                                            return false;
+                                        } else if (insumoStockUnit === 'unidades' && (item.unit === 'g' || item.unit === 'ml')) {
+                                            // Si buscamos en unidades pero el item está en g o ml, no coincide
+                                            return false;
+                                        }
+                                        
+                                        if (insumoStockOp === 'equals' && Math.abs(itemStock - filterValue) > 0.001) return false;
+                                        if (insumoStockOp === 'gt' && itemStock <= filterValue) return false;
+                                        if (insumoStockOp === 'gte' && itemStock < filterValue) return false;
+                                        if (insumoStockOp === 'lt' && itemStock >= filterValue) return false;
+                                        if (insumoStockOp === 'lte' && itemStock > filterValue) return false;
+                                    }
+                                    
+                                    return true;
+                                })
+                                .map(item => {
+                                    let stockDisplay;
+                                    const stockNum = parseFloat(item.stock);
+                                    if (item.unit === 'g') {
+                                        stockDisplay = `${parseFloat((stockNum / 1000).toFixed(3))} kilos`;
+                                    } else if (item.unit === 'ml') {
+                                        stockDisplay = `${parseFloat((stockNum / 1000).toFixed(3))} litros`;
+                                    } else {
+                                        stockDisplay = `${stockNum} unidades`;
+                                    }
+                                    
+                                    const isLowStock = item.stock < (item.lowStockThreshold || item.low_stock_threshold || 0);
+                                    
+                                    return (
+                                        <div key={item.id} className={`inventory-card ${isLowStock ? 'low-stock' : ''}`}>
+                                            <div className="inventory-card-content">
+                                                <h4 className="inventory-card-title">{item.name}</h4>
+                                                <div className="inventory-card-stock">
+                                                    <span className="stock-label">Stock:</span>
+                                                    <span className={`stock-value ${isLowStock ? 'low' : ''}`}>{stockDisplay}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                        </div>
+                    </div>
+                )}
                 <hr />
-                {userRole === 'Gerente' && (
-                    <div className="inventory-change-section">
+          {/* Bloque 'Registrar Cambios en el Inventario' comentado  */}
+          {false && (
+              <div className="inventory-change-section">
                         <h3>Registrar Cambios en el Inventario</h3>
                         {!showChangeForm ? (
                             <button className="main-button" onClick={() => setShowChangeForm(true)}>Registrar Salida (Excepcional)</button>
@@ -1495,285 +2121,56 @@ const App = () => {
     };
 
     const SalesView = () => {
-        const [cartItems, setCartItems] = useState([]);
-        const [total, setTotal] = useState(0);
-        const [showMovementForm, setShowMovementForm] = useState(false);
-        const [newMovement, setNewMovement] = useState({ type: 'Entrada', amount: '', description: '' });
-        const [message, setMessage] = useState('');
         const [activeTab, setActiveTab] = useState('ventas'); // 'ventas' o 'caja'
-        const [selectedProduct, setSelectedProduct] = useState(null);
-        const [quantity, setQuantity] = useState(1);
-        const [paymentMethod, setPaymentMethod] = useState('');
-
-        const availableProducts = products.filter(product => 
-            product.category === 'Producto' && product.stock > 0
-        );
-
-        const productOptions = availableProducts.map(p => ({ value: p.id, label: `${p.name} (${p.price}) - Stock: ${p.stock}` }));
-
-        const addToCart = () => {
-            if (!selectedProduct) {
-                setMessage('Por favor, selecciona un producto.');
-                return;
-            }
-
-            const productToAdd = products.find(p => p.id === selectedProduct.value);
-            if (!productToAdd) {
-                setMessage('Producto no encontrado.');
-                return;
-            }
-
-            if (quantity > productToAdd.stock) {
-                setMessage('No hay suficiente stock para la cantidad solicitada.');
-                return;
-            }
-
-            setCartItems(prevItems => {
-                const existingItem = prevItems.find(item => item.product.id === productToAdd.id);
-                if (existingItem) {
-                    const newQuantity = existingItem.quantity + quantity;
-                    if (newQuantity > productToAdd.stock) {
-                        setMessage('La cantidad total en el carrito supera el stock disponible.');
-                        return prevItems;
-                    }
-                    return prevItems.map(item =>
-                        item.product.id === productToAdd.id
-                            ? { ...item, quantity: newQuantity }
-                            : item
-                    );
-                } else {
-                    return [...prevItems, { product: productToAdd, quantity: quantity }];
-                }
-            });
-            setSelectedProduct(null);
-            setQuantity(1);
-        };
-
-        const updateQuantity = (productId, newQuantity) => {
-            const product = products.find(p => p.id === productId);
-            if (newQuantity > product.stock) {
-                setMessage(`No puedes vender más de ${product.stock} unidades de ${product.name}.`);
-                return;
-            }
-
-            setCartItems(prevItems =>
-                prevItems.map(item =>
-                    item.product.id === productId
-                        ? { ...item, quantity: newQuantity }
-                        : item
-                )
-            );
-        };
-
-        const removeFromCart = (productId) => {
-            setCartItems(prevItems => prevItems.filter(item => item.product.id !== productId));
-        };
-
-        useEffect(() => {
-            const newTotal = cartItems.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
-            setTotal(newTotal);
-        }, [cartItems]);
-
-        const handleRegisterSale = async () => {
-            if (cartItems.length === 0) {
-                setMessage('El carrito está vacío.');
-                return;
-            }
-
-            if (!paymentMethod) {
-                setMessage('Por favor, selecciona un método de pago.');
-                return;
-            }
-
-            const description = `Venta: ${cartItems.map(item => `${item.product.name} x${item.quantity}`).join(', ')}`;
-
-            const saleItems = cartItems.map(item => ({
-                product_id: item.product.id,
-                product_name: item.product.name,
-                quantity: item.quantity,
-                price: item.product.price
-            }));
-
-            try {
-                await api.post('/sales/', {
-                    total_amount: total,
-                    payment_method: paymentMethod,
-                    items: saleItems
-                });
-                await api.post('/cash-movements/', {
-                    type: 'Entrada',
-                    amount: total,
-                    description,
-                    payment_method: paymentMethod
-                });
-                
-                await loadProducts();
-                await loadCashMovements();
-                
-                setCartItems([]);
-                setMessage('✅ Venta registrada con éxito, stock actualizado y entrada de caja registrada.');
-            } catch (err) {
-                console.error('Error registrando venta:', err);
-                setMessage('❌ No se pudo registrar la venta en el servidor.');
-            }
-        };
-
-        const handleRegisterMovement = async (e) => {
-            e.preventDefault();
-            const amount = parseFloat(newMovement.amount);
-            const currentBalance = cashMovements.reduce((sum, m) => sum + (m.type === 'Entrada' ? m.amount : -m.amount), 0);
-
-            if (newMovement.type === 'Salida' && amount > currentBalance) {
-                setMessage(' Saldo insuficiente para registrar esta salida.');
-                return;
-            }
-
-            const payload = {
-                type: newMovement.type,
-                amount,
-                description: newMovement.description,
-            };
-
-            try {
-                await api.post('/cash-movements/', payload);
-                
-                await loadCashMovements();
-                
-                setNewMovement({ type: 'Entrada', amount: '', description: '' });
-                setShowMovementForm(false);
-                setMessage('✅ Movimiento registrado exitosamente.');
-            } catch (err) {
-                console.error('Error registrando movimiento de caja:', err);
-                setMessage('❌ No se pudo registrar el movimiento de caja.');
-            }
-        };
-        
-        const currentBalance = cashMovements.reduce((sum, m) => sum + (m.type === 'Entrada' ? m.amount : -m.amount), 0);
 
         return (
-            <div className="sales-container">
-                <h2>Registrar Venta</h2>
-                
-                <div className="tab-navigation">
-                    <button 
-                        className={`tab-button ${activeTab === 'ventas' ? 'active' : ''}`}
-                        onClick={() => setActiveTab('ventas')}
-                    >
-                        Registrar Venta
-                    </button>
-                    <button 
-                        className={`tab-button ${activeTab === 'caja' ? 'active' : ''}`}
-                        onClick={() => setActiveTab('caja')}
-                    >
-                        Movimientos de Caja
-                    </button>
+            <div className="min-h-screen bg-gray-50">
+                {/* Navigation Tabs */}
+                <div className="bg-white shadow-sm border-b border-gray-200">
+                    <div className="max-w-full mx-auto px-2 sm:px-4">
+                        <div className="flex space-x-4">
+                            <button
+                                onClick={() => setActiveTab('ventas')}
+                                className={`py-4 px-6 font-medium text-lg transition-all rounded-t-lg ${
+                                    activeTab === 'ventas'
+                                        ? 'text-white'
+                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                }`}
+                                style={activeTab === 'ventas' ? { backgroundColor: 'rgb(82, 150, 214)' } : {}}
+                            >
+                                Registrar Venta
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('caja')}
+                                className={`py-4 px-6 font-medium text-lg transition-all rounded-t-lg ${
+                                    activeTab === 'caja'
+                                        ? 'text-white'
+                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                }`}
+                                style={activeTab === 'caja' ? { backgroundColor: 'rgb(82, 150, 214)' } : {}}
+                            >
+                                Movimientos de Caja
+                            </button>
+                        </div>
+                    </div>
                 </div>
 
-                {message && <p className="message">{message}</p>}
-
-                {activeTab === 'ventas' && (
-                    <div className="tab-content">
-                        <div className="product-selection">
-                            <h3>Selecciona Productos</h3>
-                            <Select
-                                options={productOptions}
-                                value={selectedProduct}
-                                onChange={setSelectedProduct}
-                                placeholder="Buscar producto..."
-                                isClearable
-                                className="searchable-select"
-                            />
-                            <input
-                                type="number"
-                                value={quantity}
-                                onChange={(e) => setQuantity(parseInt(e.target.value, 10))}
-                                min="1"
-                            />
-                            <button onClick={addToCart} className="action-button primary">Agregar al Carrito</button>
-                        </div>
-                        <div className="cart-summary">
-                            <h3>Resumen de Venta</h3>
-                            <ul className="list-container">
-                                {cartItems.map(item => (
-                                    <li key={item.product.id} className="list-item">
-                                        <span>{item.product.name}</span>
-                                        <input
-                                            type="number"
-                                            value={item.quantity}
-                                            onChange={(e) => updateQuantity(item.product.id, parseInt(e.target.value, 10))}
-                                            min="1"
-                                        />
-                                        <span>${(item.product.price * item.quantity).toFixed(2)}</span>
-                                        <button onClick={() => removeFromCart(item.product.id)} className="delete-button">Quitar</button>
-                                    </li>
-                                ))}
-                            </ul>
-                            <div className="form-group">
-                                <label>Método de Pago:</label>
-                                <select 
-                                    value={paymentMethod} 
-                                    onChange={e => setPaymentMethod(e.target.value)} 
-                                    required
-                                >
-                                    <option value="">Seleccionar método de pago</option>
-                                    <option value="efectivo">Efectivo</option>
-                                    <option value="debito">Débito</option>
-                                    <option value="credito">Crédito</option>
-                                    <option value="transferencia">Transferencia</option>
-                                </select>
-                            </div>
-                            <div className="total-display">
-                                <strong>Total: ${total.toFixed(2)}</strong>
-                            </div>
-                            <button className="checkout-button" onClick={handleRegisterSale} disabled={cartItems.length === 0}>
-                                Confirmar Venta
-                            </button>
-                        </div>
+                {/* Content Area */}
+                <div className="max-w-full mx-auto px-2 sm:px-4 py-4">
+                    <div style={{ display: activeTab === 'ventas' ? 'block' : 'none' }}>
+                        <Registrar_Venta 
+                            products={products}
+                            loadProducts={loadProducts}
+                            loadCashMovements={loadCashMovements}
+                        />
                     </div>
-                )}
-
-                {activeTab === 'caja' && (
-                    <div className="tab-content">
-                        <div className="balance-display">
-                            <h3>Saldo Actual de Caja</h3>
-                            <div className={`balance-amount ${currentBalance >= 0 ? 'positive' : 'negative'}`}>
-                                ${safeToFixed(currentBalance)}
-                            </div>
-                        </div>
-                        
-                        {!showMovementForm ? (
-                            <button className="main-button" onClick={() => setShowMovementForm(true)}>
-                                Registrar Nuevo Movimiento
-                            </button>
-                        ) : (
-                            <form className="form-container" onSubmit={handleRegisterMovement}>
-                                <h3>Nuevo Movimiento</h3>
-                                <select value={newMovement.type} onChange={e => setNewMovement({ ...newMovement, type: e.target.value })} required>
-                                    <option value="Entrada">Entrada</option>
-                                    <option value="Salida">Salida</option>
-                                </select>
-                                <input type="number" value={newMovement.amount} onChange={e => setNewMovement({ ...newMovement, amount: e.target.value })} placeholder="Monto" required />
-                                <textarea value={newMovement.description} onChange={e => setNewMovement({ ...newMovement, description: e.target.value })} placeholder="Descripción (ej: Gasto de limpieza)" required />
-                                <div className="button-group">
-                                    <button type="submit" className="action-button primary">Registrar</button>
-                                    <button type="button" className="action-button secondary" onClick={() => setShowMovementForm(false)}>Cancelar</button>
-                                </div>
-                            </form>
-                        )}
-                        
-                        <h3>Historial de Movimientos</h3>
-                        <ul className="list-container">
-                            {cashMovements.map(movement => (
-                                <li key={movement.id} className="list-item">
-                                    <span>{movement.date} - {movement.description} {movement.payment_method && `(${movement.payment_method})`}</span>
-                                    <span className={movement.type === 'Entrada' ? 'positive' : 'negative'}>
-                                        {movement.type === 'Entrada' ? '+' : '-'} ${movement.amount}
-                                    </span>
-                                </li>
-                            ))}
-                        </ul>
+                    
+                    <div style={{ display: activeTab === 'caja' ? 'block' : 'none' }}>
+                        <Movimientos_De_Caja 
+                            cashMovements={cashMovements}
+                        />
                     </div>
-                )}
+                </div>
             </div>
         );
     };
@@ -1840,7 +2237,7 @@ const App = () => {
                 <ul className="list-container">
                     {cashMovements.map(movement => (
                         <li key={movement.id} className="list-item">
-                            <span>{movement.date} - {movement.description}</span>
+                            <span>{formatMovementDate(movement.date)} - {movement.description}</span>
                             <span className={movement.type === 'Entrada' ? 'positive' : 'negative'}>
                                 {movement.type === 'Entrada' ? '+' : '-'} ${movement.amount}
                             </span>
@@ -1853,16 +2250,41 @@ const App = () => {
 
     // Componente de la interfaz de creación de nuevos productos.
         // Componente de la interfaz de creación de nuevos productos.
-        const ProductCreationView = () => {
-            const [newProduct, setNewProduct] = useState({ 
+        const ProductCreationViewComponent = () => {
+            // Función para convertir y formatear unidades (igual que en ProductionCreation)
+            const formatQuantityWithConversion = (quantity, unit) => {
+                const num = parseFloat(quantity);
+                
+                if (unit === 'g') {
+                    if (num >= 1000) {
+                        const kg = (num / 1000).toFixed(2);
+                        return `${num.toFixed(1)} g (${kg} kg)`;
+                    }
+                    return `${num.toFixed(1)} g`;
+                } else if (unit === 'ml') {
+                    if (num >= 1000) {
+                        const liters = (num / 1000).toFixed(2);
+                        return `${num.toFixed(1)} ml (${liters} L)`;
+                    }
+                    return `${num.toFixed(1)} ml`;
+                } else {
+                    return `${num.toFixed(1)} ${unit}`;
+                }
+            };
+
+            const [newProduct, setNewProduct] = useState({
                 name: '', 
                 description: '', 
                 price: 0, 
                 stock: 0, 
+                // Rendimiento de la receta: cuántas unidades produce una receta/lote
+                recipe_yield: 1,
                 low_stock_threshold: 10,
-                category: 'Producto'
+                high_stock_multiplier: 2.0,
+                category: 'Producto',
+                unit: 'unidades'
             });
-            const [recipeItems, setRecipeItems] = useState([{ ingredient: '', quantity: '', unit: 'g' }]);
+            const [recipeItems, setRecipeItems] = useState([{ ingredient: '', quantity: '', unit: '' }]);
             const [message, setMessage] = useState('');
 
             const handleRecipeChange = (index, field, value) => {
@@ -1872,7 +2294,26 @@ const App = () => {
                 if (field === 'ingredient') {
                     const selectedIngredient = products.find(p => p.id === value);
                     if (selectedIngredient) {
-                        newRecipeItems[index]['unit'] = selectedIngredient.unit;
+                        // Normalizar variantes de unidad que vengan del backend
+                        const normalizeUnit = (u) => {
+                            if (u === null || u === undefined) return '';
+                            const s = String(u).toLowerCase().trim();
+                            // Mapear a 'g'
+                            if (['g', 'gr', 'grs', 'gramo', 'gramos', 'grams', 'gram'].includes(s)) return 'g';
+                            // Mapear a 'ml'
+                            if (['ml', 'mililitro', 'mililitros', 'milil', 'millilitro', 'millilitros'].includes(s)) return 'ml';
+                            // Mapear a 'unidades'
+                            if (['unidad', 'unidades', 'u', 'uds', 'unidad(es)'].includes(s)) return 'unidades';
+                            return '';
+                        };
+
+                        const mapped = normalizeUnit(selectedIngredient.unit || '');
+                        if (mapped) {
+                            newRecipeItems[index]['unit'] = mapped;
+                        } else {
+                            // Si no se pudo mapear, dejar vacío y loggear para debug
+                            newRecipeItems[index]['unit'] = '';
+                        }
                     }
                 }
 
@@ -1880,7 +2321,7 @@ const App = () => {
             };
 
             const addRecipeItem = () => {
-                setRecipeItems([...recipeItems, { ingredient: '', quantity: '', unit: 'g' }]);
+                setRecipeItems([...recipeItems, { ingredient: '', quantity: '', unit: '' }]);
             };
 
             const removeRecipeItem = (index) => {
@@ -1958,9 +2399,21 @@ const App = () => {
                                 return;
                             }
     
-                            const requiredQuantity = parseFloat(item.quantity) * parseInt(newProduct.stock, 10);
+                            // Calcular cantidad requerida proporcionalmente según el rendimiento por lote
+                            const recipeYield = parseFloat(newProduct.recipe_yield) || 1;
+                            const stockFloat = parseFloat(newProduct.stock) || 0;
+                            const multiplier = recipeYield > 0 ? (stockFloat / recipeYield) : 0;
+                            let requiredQuantity = parseFloat(item.quantity) * multiplier;
+
+                            // Si la unidad es 'unidades' redondear hacia arriba
+                            if ((item.unit || '').toString().toLowerCase() === 'unidades') {
+                                requiredQuantity = Math.ceil(requiredQuantity);
+                            }
+
                             if (ingredientInStore.stock < requiredQuantity) {
-                                setMessage(`🚫 Error: Stock insuficiente para el insumo "${ingredientInStore.name}". Se necesitan ${requiredQuantity} ${item.unit} para crear ${newProduct.stock} unidades del producto, pero solo hay ${ingredientInStore.stock} ${ingredientInStore.unit || ''} disponibles.`);
+                                const requiredFormatted = formatQuantityWithConversion(requiredQuantity, item.unit);
+                                const availableFormatted = formatQuantityWithConversion(ingredientInStore.stock, ingredientInStore.unit || item.unit);
+                                setMessage(`🚫 Error: Stock insuficiente para el insumo "${ingredientInStore.name}". Se necesitan ${requiredFormatted} para crear ${newProduct.stock} unidades del producto (rendimiento por lote: ${recipeYield}), pero solo hay ${availableFormatted} disponibles.`);
                                 return;
                             }
                         }
@@ -1982,21 +2435,43 @@ const App = () => {
                         }
                     }
                     
+                    // Para productos finales, el stock inicial representa una producción inicial
+                    let finalStock = parseInt(newProduct.stock);
+
+                    // Convertir umbral de stock a unidad base antes de enviar
+                    const convertThresholdToBaseUnit = (threshold, unit) => {
+                        if (unit === 'g') return threshold * 1000; // Kg a gramos
+                        if (unit === 'ml') return threshold * 1000; // L a mililitros
+                        return threshold; // unidades sin cambio
+                    };
+
+                    // Convertir stock a unidad base antes de enviar
+                    const convertStockToBaseUnit = (stock, unit) => {
+                        if (unit === 'g') return stock * 1000; // Kg a gramos
+                        if (unit === 'ml') return stock * 1000; // L a mililitros
+                        return stock; // unidades sin cambio
+                    };
+
                     const payload = {
                         name: newProduct.name.trim(),
                         description: newProduct.description.trim(),
                         price: parseFloat(newProduct.price),
-                        stock: parseInt(newProduct.stock),
-                        low_stock_threshold: parseInt(newProduct.low_stock_threshold),
+                        stock: convertStockToBaseUnit(finalStock, newProduct.unit),
+                        recipe_yield: parseInt(newProduct.recipe_yield) || 1,
+                        low_stock_threshold: convertThresholdToBaseUnit(parseInt(newProduct.low_stock_threshold), newProduct.unit),
+                        high_stock_multiplier: parseFloat(newProduct.high_stock_multiplier),
                         category: newProduct.category,
+                        unit: newProduct.unit,
                         recipe_ingredients: recipePayload
                     };
                     
-                    // Crear producto en el backend
+                    // Crear producto
                     const response = await api.post('/products/', payload);
 
                     // Recargar productos desde PostgreSQL para mantener sincronización
                     await loadProducts();
+                    setMessage('✅ Producto creado exitosamente y datos recargados desde PostgreSQL.');
+                    // Productos recargados desde PostgreSQL después de crear producto
 
                     // Limpiar formulario
                     setNewProduct({ 
@@ -2004,13 +2479,13 @@ const App = () => {
                         description: '', 
                         price: 0, 
                         stock: 0, 
+                        recipe_yield: 1,
                         low_stock_threshold: 10,
-                        category: 'Producto'
+                        high_stock_multiplier: 2.0,
+                        category: 'Producto',
+                        unit: 'unidades'
                     });
-                    setRecipeItems([{ ingredient: '', quantity: '', unit: 'g' }]);
-
-                    setMessage('✅ Producto creado exitosamente y datos recargados desde PostgreSQL.');
-                    console.log('🔄 Productos recargados desde PostgreSQL después de crear producto');
+                    setRecipeItems([{ ingredient: '', quantity: '', unit: '' }]);
                 } catch (error) {
                     console.log('❌ Error creando producto:', error);
                     
@@ -2044,23 +2519,45 @@ const App = () => {
                         <h2>Crear Productos Nuevos</h2>
                     </div>
                     {message && <p className="message">{message}</p>}
-                    <p>Crea nuevos productos e insumos. Los productos creados aparecerán automáticamente en la sección "Inventario" y "Editar Productos".</p>
+                    <p className='Parrafo'>Crea nuevos productos e insumos. Los productos creados aparecerán automáticamente en la sección "Inventario" y "Editar Productos".</p>
                     
                     <h3>Agregar nuevo producto</h3>
                     <form className="form-container" onSubmit={handleCreateProduct}>
-                        <input 
-                            type="text" 
-                            value={newProduct.name} 
-                            onChange={e => setNewProduct({ ...newProduct, name: e.target.value })} 
-                            placeholder="Nombre del Producto *" 
-                            required 
-                        />
-                        <textarea 
-                            value={newProduct.description} 
-                            onChange={e => setNewProduct({ ...newProduct, description: e.target.value })} 
-                            placeholder="Descripción del producto (opcional)"
-                            rows="3"
-                        />
+                        <div className="form-row">
+                            <div className="form-group">
+                                <label>Nombre del Producto *</label>
+                                <input 
+                                    type="text" 
+                                    value={newProduct.name} 
+                                    onChange={e => setNewProduct({ ...newProduct, name: e.target.value })} 
+                                    placeholder="Nombre del Producto *" 
+                                    required 
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label>Descripción del Producto</label>
+                                <textarea 
+                                    value={newProduct.description} 
+                                    onChange={e => setNewProduct({ ...newProduct, description: e.target.value })} 
+                                    placeholder="Descripción del producto (opcional)"
+                                    rows="3"
+                                />
+                            </div>
+                        </div>
+                       
+                        
+                        
+
+                        <p>Unidad de Medida</p>
+                        <select 
+                            value={newProduct.unit} 
+                            onChange={e => setNewProduct({ ...newProduct, unit: e.target.value })}
+                            required
+                        >
+                            <option value="unidades">Unidades</option>
+                            <option value="g">Gramos (se mostrará en Kg)</option>
+                            <option value="ml">Mililitros (se mostrará en L)</option>
+                        </select>
                         
                         <p>Precio</p>
                         <input 
@@ -2072,29 +2569,48 @@ const App = () => {
                             //step="0.01"
                             required 
                         />
-                        <p>Stock Inicial</p>
+                        <p>Stock ({newProduct.unit === 'g' ? 'Kg' : newProduct.unit === 'ml' ? 'L' : 'Unidades'})</p>
                         <input 
                             type="number" 
                             value={newProduct.stock} 
                             onChange={e => setNewProduct({ ...newProduct, stock: parseInt(e.target.value) || 0 })} 
-                            placeholder="Stock Inicial *" 
+                            placeholder={`Stock en ${newProduct.unit === 'g' ? 'Kg' : newProduct.unit === 'ml' ? 'L' : 'Unidades'}`} 
                             min="0"
                             required 
                         />
-                        <p>Umbral de stock</p>
+                        
+                        <p>Rendimiento de la receta (unidades por lote)</p>
+                        <input
+                            type="number"
+                            value={newProduct.recipe_yield}
+                            onChange={e => setNewProduct({ ...newProduct, recipe_yield: parseInt(e.target.value) || 1 })}
+                            placeholder="Ej: 10 (la receta rinde 10 unidades)"
+                            min="1"
+                            required
+                        />
+
+                        <p>Umbral de Stock Bajo ({newProduct.unit === 'g' ? 'Kg' : newProduct.unit === 'ml' ? 'L' : 'Unidades'})</p>
                         <input 
                             type="number" 
                             value={newProduct.low_stock_threshold} 
                             onChange={e => setNewProduct({ ...newProduct, low_stock_threshold: parseInt(e.target.value) || 10 })} 
-                            placeholder="Umbral de Stock Bajo (por defecto: 10)" 
+                            placeholder={`Umbral en ${newProduct.unit === 'g' ? 'Kg' : newProduct.unit === 'ml' ? 'L' : 'Unidades'} (por defecto: 10)`} 
                             min="0"
                         />
 
-
+                        <p>Multiplicador para Stock Alto</p>
+                        <input 
+                            type="number" 
+                            step="0.1"
+                            value={newProduct.high_stock_multiplier} 
+                            onChange={e => setNewProduct({ ...newProduct, high_stock_multiplier: parseFloat(e.target.value) || 2.0 })} 
+                            placeholder="Ej: 2.0 = duplicar, 3.5 = triplicar y medio (por defecto: 2.0)" 
+                            min="1.1"
+                        />
 
                         {newProduct.category === 'Producto' && (
                             <div className="recipe-builder">
-                                <h4>Receta (Insumos por unidad de producto)</h4>
+                                <h4>Receta (Insumos por receta / por lote)</h4>
                                 {recipeItems.map((item, index) => (
                                     <div key={index} className="recipe-item">
                                         <Select
@@ -2130,161 +2646,12 @@ const App = () => {
             );
         };
 
-        
+                
 
         // Componente de la interfaz de gestión de proveedores (solo para Gerente).
         const SupplierManagement = () => {
-            const [showAddSupplier, setShowAddSupplier] = useState(false);
-            const [editingSupplier, setEditingSupplier] = useState(null); // Nuevo estado para edición
-            const [newSupplier, setNewSupplier] = useState({ 
-                name: '', 
-                cuit: '', 
-                address: '', 
-                phone: '', 
-                products: '' 
-            });
-            const [message, setMessage] = useState('');
-    
-            const validateCUIT = (cuit) => /^\d{11}$/.test(cuit);
-            const validatePhone = (phone) => /^\d{8,}$/.test(phone);
-
-            const fetchSuppliers = async () => {
-                try {
-                    const response = await api.get('/suppliers/');
-                    setSuppliers(response.data);
-                } catch (error) {
-                    console.error('Error cargando proveedores:', error);
-                    setMessage('Error al cargar la lista de proveedores.');
-                }
-            };
-
-            const handleAddSupplier = async (e) => {
-                e.preventDefault();
-                if (!newSupplier.name.trim()) {
-                    setMessage('🚫 Error: El nombre es obligatorio.');
-                    return;
-                }
-                if (!validateCUIT(newSupplier.cuit)) {
-                    setMessage('🚫 Error: El CUIT debe ser un número de 11 dígitos.');
-                    return;
-                }
-                if (!validatePhone(newSupplier.phone)) {
-                    setMessage('🚫 Error: El teléfono debe contener solo números, con un mínimo de 8 dígitos.');
-                    return;
-                }
-                try {
-                    await api.post('/suppliers/', newSupplier);
-                    await fetchSuppliers(); // Recargar lista
-                    setMessage('Proveedor agregado correctamente.');
-                    setShowAddSupplier(false);
-                    setNewSupplier({ name: '', cuit: '', address: '', phone: '', products: '' });
-                } catch (error) {
-                    setMessage('Error al agregar proveedor.');
-                }
-            };
-
-            const handleUpdateSupplier = async (e) => {
-                e.preventDefault();
-                if (!editingSupplier) return;
-
-                if (!validateCUIT(editingSupplier.cuit)) {
-                    setMessage('🚫 Error: El CUIT debe ser un número de 11 dígitos.');
-                    return;
-                }
-                if (!validatePhone(editingSupplier.phone)) {
-                    setMessage('🚫 Error: El teléfono debe contener solo números, con un mínimo de 8 dígitos.');
-                    return;
-                }
-
-                try {
-                    await api.put(`/suppliers/${editingSupplier.id}/`, editingSupplier);
-                    await fetchSuppliers(); // Recargar lista
-                    setEditingSupplier(null);
-                    setMessage('✅ Proveedor actualizado exitosamente.');
-                } catch (error) {
-                    console.error('Error actualizando proveedor:', error.response?.data || error.message);
-                    setMessage('Error al actualizar el proveedor.');
-                }
-            };
-
-            const handleDeleteSupplier = async (supplierId) => {
-                if (!window.confirm('¿Estás seguro de que quieres eliminar este proveedor?')) return;
-                try {
-                    await api.delete(`/suppliers/${supplierId}/`);
-                    await fetchSuppliers(); // Recargar lista
-                    setMessage('Proveedor eliminado correctamente.');
-                } catch (error) {
-                    setMessage('Error al eliminar proveedor.');
-                }
-            };
-
-            const startEditing = (supplier) => {
-                setEditingSupplier({ ...supplier });
-                setShowAddSupplier(false);
-            };
-
-            const renderContent = () => {
-                if (editingSupplier) {
-                    return (
-                        <form className="form-container" onSubmit={handleUpdateSupplier}>
-                            <h3>Editando a {editingSupplier.name}</h3>
-                            <input type="text" value={editingSupplier.name} onChange={e => setEditingSupplier({ ...editingSupplier, name: e.target.value })} placeholder="Nombre del Proveedor" required />
-                            <input type="text" value={editingSupplier.cuit} onChange={e => setEditingSupplier({ ...editingSupplier, cuit: e.target.value })} placeholder="CUIT (11 dígitos)" required />
-                            <input type="text" value={editingSupplier.address} onChange={e => setEditingSupplier({ ...editingSupplier, address: e.target.value })} placeholder="Dirección" required />
-                            <input type="text" value={editingSupplier.phone} onChange={e => setEditingSupplier({ ...editingSupplier, phone: e.target.value })} placeholder="Teléfono" required />
-                            <input type="text" value={editingSupplier.products} onChange={e => setEditingSupplier({ ...editingSupplier, products: e.target.value })} placeholder="Productos que provee" />
-                            <div className="button-group">
-                                <button type="submit" className="action-button primary">Guardar Cambios</button>
-                                <button type="button" className="action-button secondary" onClick={() => setEditingSupplier(null)}>Cancelar</button>
-                            </div>
-                        </form>
-                    );
-                }
-
-                if (showAddSupplier) {
-                    return (
-                        <form className="form-container" onSubmit={handleAddSupplier}>
-                            <h3>Registrar Proveedor</h3>
-                            <input type="text" value={newSupplier.name} onChange={e => setNewSupplier({ ...newSupplier, name: e.target.value })} placeholder="Nombre del Proveedor" required />
-                            <input type="text" value={newSupplier.cuit} onChange={e => setNewSupplier({ ...newSupplier, cuit: e.target.value })} placeholder="CUIT (11 dígitos)" required />
-                            <input type="text" value={newSupplier.address} onChange={e => setNewSupplier({ ...newSupplier, address: e.target.value })} placeholder="Dirección" required />
-                            <input type="text" value={newSupplier.phone} onChange={e => setNewSupplier({ ...newSupplier, phone: e.target.value })} placeholder="Teléfono" required />
-                            <input type="text" value={newSupplier.products} onChange={e => setNewSupplier({ ...newSupplier, products: e.target.value })} placeholder="Productos que provee" />
-                            <div className="button-group">
-                                <button type="submit" className="action-button primary">Registrar</button>
-                                <button type="button" className="action-button secondary" onClick={() => setShowAddSupplier(false)}>Cancelar</button>
-                            </div>
-                        </form>
-                    );
-                }
-
-                return <button className="main-button" onClick={() => setShowAddSupplier(true)}>Registrar Nuevo Proveedor</button>;
-            };
-
-            return (
-                <div className="management-container">
-                    <h2>Gestión de Proveedores</h2>
-                    {message && <p className="message">{message}</p>}
-                    {renderContent()}
-                    <h3>Proveedores Registrados</h3>
-                    <ul className="list-container">
-                        {suppliers.map(supplier => (
-                            <li key={supplier.id} className="list-item">
-                                <div className="supplier-info-container">
-                                    <div><strong>{supplier.name}</strong> (CUIT: {supplier.cuit})</div>
-                                    <div>{supplier.address} | Tel: {supplier.phone}</div>
-                                    <div>Productos: {supplier.products}</div>
-                                </div>
-                                <div className="button-group">
-                                    <button onClick={() => startEditing(supplier)} className="edit-button">Editar</button>
-                                    <button onClick={() => handleDeleteSupplier(supplier.id)} className="delete-button">Eliminar</button>
-                                </div>
-                            </li>
-                        ))}
-                    </ul>
-                </div>
-            );
-        }
+            return <Proveedores suppliers={suppliers} setSuppliers={setSuppliers} />;
+        };
     
         // Componente de la interfaz de gestión de compras (para Gerente, Encargado, Cajero, Panadero).
         const PurchaseManagementInternal = () => {
@@ -2743,602 +3110,9 @@ const PurchaseRequests = () => {
     );
 };
     
-        // Componente de la interfaz de gestión de pedidos de clientes.
-        const OrderManagementComponent = () => {
-            const [showAddOrder, setShowAddOrder] = useState(false);
-            const [newOrder, setNewOrder] = useState({
-                customerName: '',
-                date: new Date().toISOString().split('T')[0], // Fecha actual por defecto
-                paymentMethod: '',
-                items: [{ productName: '', quantity: 1, unitPrice: 0, total: 0 }],
-                notes: ''
-            });
-            const [message, setMessage] = useState('');
-            const [showAddPurchase, setShowAddPurchase] = useState(false);
-            const [confirmDelete, setConfirmDelete] = useState(null);
 
-            const calculatePurchaseTotal = () => {
-                return newOrder.items.reduce((sum, item) => sum + (item.total || 0), 0);
-            };
+    
 
-            const handleDeletePurchase = async (purchaseId) => {
-                console.warn('Attempted to delete purchase from a deprecated component.');
-            };
-
-            const handleCancelDelete = () => {
-                setConfirmDelete(null);
-            };
-    
-            // Función para agregar un nuevo item al pedido
-            const addItem = () => {
-                setNewOrder({
-                    ...newOrder,
-                    items: [...newOrder.items, { productName: '', quantity: 1, unitPrice: 0, total: 0 }]
-                });
-            };
-    
-            // Función para eliminar un item del pedido
-            const removeItem = (index) => {
-                if (newOrder.items.length > 1) {
-                    const updatedItems = newOrder.items.filter((_, i) => i !== index);
-                    setNewOrder({ ...newOrder, items: updatedItems });
-                }
-            };
-    
-            // Función para actualizar un item
-            const updateItem = (index, field, value) => {
-                const updatedItems = [...newOrder.items];
-                updatedItems[index] = { ...updatedItems[index], [field]: value };
-                
-                // Si se cambia el nombre del producto, buscar su precio en la lista de productos
-                if (field === 'productName') {
-                    const selectedProduct = products.find(p => p.name === value);
-                    if (selectedProduct) {
-                        updatedItems[index].unitPrice = selectedProduct.price;
-                        updatedItems[index].total = (updatedItems[index].quantity || 0) * selectedProduct.price;
-                    }
-                }
-                
-                // Recalcular el total del item si se cambia cantidad o precio
-                if (field === 'quantity' || field === 'unitPrice') {
-                    const quantity = field === 'quantity' ? (value || 0) : (updatedItems[index].quantity || 0);
-                    const unitPrice = field === 'unitPrice' ? (value || 0) : (updatedItems[index].unitPrice || 0);
-                    updatedItems[index].total = quantity * unitPrice;
-                }
-                
-                setNewOrder({ ...newOrder, items: updatedItems });
-            };
-
-            // Función para calcular el total del pedido
-            const calculateOrderTotal = () => {
-                return newOrder.items.reduce((sum, item) => sum + (item.total || 0), 0);
-            };
-    
-            const handleAddOrder = async (e) => {
-                e.preventDefault();
-                
-                // Validaciones
-                if (!newOrder.customerName.trim()) {
-                    setMessage('🚫 Error: Debe ingresar el nombre del cliente.');
-                    return;
-                }
-                
-                if (!newOrder.paymentMethod) {
-                    setMessage('🚫 Error: Debe seleccionar un método de pago.');
-                    return;
-                }
-                
-                // Validar que al menos un producto tenga cantidad mayor a 0 y precio válido
-                const validItems = newOrder.items.filter(item => 
-                    item.productName.trim() && item.quantity > 0 && item.unitPrice > 0
-                );
-                
-                if (validItems.length === 0) {
-                    setMessage('🚫 Error: Debe seleccionar al menos un producto con cantidad y precio válidos.');
-                    return;
-                }
-                
-                // Enviar pedido al backend para persistencia cross-browser
-                try {
-                    const payload = {
-                        customer_name: newOrder.customerName,
-                        date: newOrder.date,
-                        payment_method: newOrder.paymentMethod,
-                        items: validItems.map(i => ({ product_name: i.productName, quantity: Number(i.quantity), unit_price: Number(i.unitPrice), total: Number(i.total) })),
-                        notes: newOrder.notes
-                    };
-
-                    const res = await api.post('/orders/', payload);
-                    if (res && res.data) {
-                        // Insertar el pedido devuelto por el servidor
-                        const created = res.data;
-                        const createdNormalized = {
-                            id: created.id,
-                            date: created.date,
-                            customerName: created.customer_name || created.customerName || '',
-                            paymentMethod: created.payment_method || created.paymentMethod || '',
-                            items: Array.isArray(created.items) ? created.items.map(it => ({ productName: it.product_name || it.productName || '', quantity: it.quantity, unitPrice: it.unit_price || it.unitPrice || 0, total: it.total || 0 })) : [],
-                            totalAmount: created.total_amount || created.totalAmount || 0,
-                            status: created.status || 'Pendiente',
-                            notes: created.notes || ''
-                        };
-
-                        setOrders(prev => [...prev, createdNormalized]);
-                        setNewOrder({ customerName: '', date: new Date().toISOString().split('T')[0], paymentMethod: '', items: [{ productName: '', quantity: 1, unitPrice: 0, total: 0 }], notes: '' });
-                        setShowAddOrder(false);
-                        setMessage('✅ Pedido de cliente registrado exitosamente.');
-                    } else {
-                        setMessage('⚠️ Pedido creado localmente, pero no se obtuvo confirmación del servidor.');
-                    }
-                } catch (err) {
-                    console.error('Error enviando pedido al backend:', err, err.response && err.response.data);
-                    setMessage('❌ Error guardando el pedido en el servidor. Revisar consola.');
-                }
-            };
-    
-            const handleUpdateOrderStatus = (orderId, newStatus) => {
-                setOrders(orders.map(order => 
-                    order.id === orderId 
-                        ? { ...order, status: newStatus }
-                        : order
-                ));
-            };
-    
-            return (
-                <div className="management-container">
-                    <h2>Gestión de Pedidos de Clientes</h2>
-                    {message && <p className="message">{message}</p>}
-                    {!showAddOrder ? (
-                        <button className="main-button" onClick={() => setShowAddOrder(true)}>Registrar Nuevo Pedido de Cliente</button>
-                    ) : (
-                        <form className="form-container" onSubmit={handleAddOrder}>
-                            <h3>Registrar Pedido de Cliente</h3>
-                            
-                            <input 
-                                type="text" 
-                                value={newOrder.customerName} 
-                                onChange={e => setNewOrder({ ...newOrder, customerName: e.target.value })} 
-                                placeholder="Nombre del cliente" 
-                                required
-                            />
-                            
-                            <input 
-                                type="date" 
-                                value={newOrder.date} 
-                                onChange={e => setNewOrder({ ...newOrder, date: e.target.value })} 
-                                required
-                            />
-                            
-                            <select 
-                                value={newOrder.paymentMethod} 
-                                onChange={e => setNewOrder({ ...newOrder, paymentMethod: e.target.value })} 
-                                required
-                            >
-                                <option value="">Seleccionar método de pago</option>
-                                <option value="efectivo">Efectivo</option>
-                                <option value="debito">Débito</option>
-                                <option value="credito">Crédito</option>
-                                <option value="transferencia">Transferencia</option>
-                            </select>
-                            
-                            <h4>Productos del Pedido</h4>
-                            
-                            {newOrder.items.map((item, index) => (
-                                <div key={index} className="order-item">
-                                    <div className="item-row">
-                                        <input 
-                                            type="text" 
-                                            value={item.productName} 
-                                            onChange={e => updateItem(index, 'productName', e.target.value)} 
-                                            placeholder="Nombre del producto" 
-                                            list="products-list"
-                                            required
-                                        />
-                                        <datalist id="products-list">
-                                            {products.map((product, idx) => (
-                                                <option key={idx} value={product.name} />
-                                            ))}
-                                        </datalist>
-                                        <input 
-                                            type="number" 
-                                            value={item.quantity || ''} 
-                                            onChange={e => {
-                                                const value = e.target.value === '' ? 0 : parseInt(e.target.value);
-                                                updateItem(index, 'quantity', isNaN(value) ? 0 : value);
-                                            }}
-                                            placeholder="Cantidad" 
-                                            min="1"
-                                            required 
-                                        />
-                                        <input 
-                                            type="number" 
-                                            value={item.unitPrice || ''} 
-                                            onChange={e => {
-                                                const value = e.target.value === '' ? 0 : parseFloat(e.target.value);
-                                                updateItem(index, 'unitPrice', isNaN(value) ? 0 : value);
-                                            }}
-                                            placeholder="Precio Unitario" 
-                                            min="0.01"
-                                            step="0.01"
-                                            required 
-                                        />
-                                        <span className="item-total">${safeToFixed(item.total)}</span>
-                                        {newOrder.items.length > 1 && (
-                                            <button 
-                                                type="button" 
-                                                onClick={() => removeItem(index)}
-                                                className="remove-item-button"
-                                            >
-                                                ❌
-                                            </button>
-                                        )}
-                                    </div>
-                                </div>
-                            ))}
-                            
-                            <button type="button" onClick={addItem} className="add-item-button">
-                                ➕ Agregar Producto
-                            </button>
-                            
-                            <div className="purchase-total">
-                                <strong>Total de la Compra: ${safeToFixed(calculatePurchaseTotal())}</strong>
-                            </div>
-                            
-                            <div className="button-group">
-                                <button type="submit" className="action-button primary">Registrar Compra</button>
-                                <button type="button" className="action-button secondary" onClick={() => setShowAddPurchase(false)}>Cancelar</button>
-                            </div>
-                        </form>
-                    )}
-    
-                    <h3>Historial de Compras</h3>
-                    <ul className="list-container">
-                        {purchases.map(purchase => (
-                            <li key={purchase.id} className="purchase-list-item">
-                                <div className="purchase-header">
-                                    <strong>Compra #{purchase.id} - {purchase.date}</strong>
-                                    <div className="purchase-actions">
-                                        <span className="purchase-status">{purchase.status}</span>
-                                        {userRole === 'Gerente' && (
-                                            <div className="delete-controls">
-                                                {confirmDelete === purchase.id ? (
-                                                    <div className="confirm-delete">
-                                                        <button 
-                                                            className="action-button danger small"
-                                                            onClick={() => handleDeletePurchase(purchase.id)}
-                                                        >
-                                                            ✓ Confirmar
-                                                        </button>
-                                                        <button 
-                                                            className="action-button secondary small"
-                                                            onClick={handleCancelDelete}
-                                                        >
-                                                            ✕ Cancelar
-                                                        </button>
-                                                    </div>
-                                                ) : (
-                                                    <button 
-                                                        className="action-button danger small"
-                                                        onClick={() => handleDeletePurchase(purchase.id)}
-                                                    >
-                                                        🗑️ Eliminar
-                                                    </button>
-                                                )}
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                                <div className="purchase-supplier">
-                                    <strong>Proveedor:</strong> {purchase.supplierName}
-                                </div>
-                                <div className="purchase-items">
-                                    <strong>Productos:</strong>
-                                    <ul>
-                                        {purchase.items.map((item, index) => (
-                                            <li key={index}>
-                                                {item.productName} - {item.quantity} x ${item.unitPrice} = ${safeToFixed(item.total)}
-                                            </li>
-                                        ))}
-                                    </ul>
-                                </div>
-                                <div className="purchase-total-display">
-                                    <strong>Total: ${safeToFixed(purchase.totalAmount)}</strong>
-                                </div>
-                            </li>
-                        ))}
-                    </ul>
-                </div>
-            );
-        };
-    
-        // Componente de la interfaz de gestión de pedidos de clientes (solo para Gerente).
-        const OrderManagement = () => {
-            const [showAddOrder, setShowAddOrder] = useState(false);
-            const [newOrder, setNewOrder] = useState({
-                customerName: '',
-                date: new Date().toISOString().split('T')[0], // Fecha actual por defecto
-                paymentMethod: '',
-                items: [{ productName: '', quantity: 1, unitPrice: 0, total: 0 }],
-                notes: ''
-            });
-            const [message, setMessage] = useState('');
-    
-            // Función para agregar un nuevo item al pedido
-            const addItem = () => {
-                setNewOrder({
-                    ...newOrder,
-                    items: [...newOrder.items, { productName: '', quantity: 1, unitPrice: 0, total: 0 }]
-                });
-            };
-    
-            // Función para eliminar un item del pedido
-            const removeItem = (index) => {
-                if (newOrder.items.length > 1) {
-                    const updatedItems = newOrder.items.filter((_, i) => i !== index);
-                    setNewOrder({ ...newOrder, items: updatedItems });
-                }
-            };
-    
-            // Función para actualizar un item
-            const updateItem = (index, field, value) => {
-                const updatedItems = [...newOrder.items];
-                updatedItems[index] = { ...updatedItems[index], [field]: value };
-                
-                // Si se cambia el nombre del producto, buscar su precio en la lista de productos
-                if (field === 'productName') {
-                    const selectedProduct = products.find(p => p.name === value);
-                    if (selectedProduct) {
-                        updatedItems[index].unitPrice = selectedProduct.price;
-                        updatedItems[index].total = (updatedItems[index].quantity || 0) * selectedProduct.price;
-                    }
-                }
-                
-                // Recalcular el total del item si se cambia cantidad o precio
-                if (field === 'quantity' || field === 'unitPrice') {
-                    const quantity = field === 'quantity' ? (value || 0) : (updatedItems[index].quantity || 0);
-                    const unitPrice = field === 'unitPrice' ? (value || 0) : (updatedItems[index].unitPrice || 0);
-                    updatedItems[index].total = quantity * unitPrice;
-                }
-                
-                setNewOrder({ ...newOrder, items: updatedItems });
-            };
-
-            // Función para calcular el total del pedido
-            const calculateOrderTotal = () => {
-                return newOrder.items.reduce((sum, item) => sum + (item.total || 0), 0);
-            };
-    
-            const handleAddOrder = async (e) => {
-                e.preventDefault();
-                
-                // Validaciones
-                if (!newOrder.customerName.trim()) {
-                    setMessage('🚫 Error: Debe ingresar el nombre del cliente.');
-                    return;
-                }
-                
-                if (!newOrder.paymentMethod) {
-                    setMessage('🚫 Error: Debe seleccionar un método de pago.');
-                    return;
-                }
-                
-                // Validar que al menos un producto tenga cantidad mayor a 0 y precio válido
-                const validItems = newOrder.items.filter(item => 
-                    item.productName.trim() && item.quantity > 0 && item.unitPrice > 0
-                );
-                
-                if (validItems.length === 0) {
-                    setMessage('🚫 Error: Debe seleccionar al menos un producto con cantidad y precio válidos.');
-                    return;
-                }
-                
-                // Enviar pedido al backend para persistencia cross-browser
-                try {
-                    const payload = {
-                        customer_name: newOrder.customerName,
-                        date: newOrder.date,
-                        payment_method: newOrder.paymentMethod,
-                        items: validItems.map(i => ({ product_name: i.productName, quantity: Number(i.quantity), unit_price: Number(i.unitPrice), total: Number(i.total) })),
-                        notes: newOrder.notes
-                    };
-
-                    const res = await api.post('/orders/', payload);
-                    if (res && res.data) {
-                        // Insertar el pedido devuelto por el servidor
-                        const created = res.data;
-                        const createdNormalized = {
-                            id: created.id,
-                            date: created.date,
-                            customerName: created.customer_name || created.customerName || '',
-                            paymentMethod: created.payment_method || created.paymentMethod || '',
-                            items: Array.isArray(created.items) ? created.items.map(it => ({ productName: it.product_name || it.productName || '', quantity: it.quantity, unitPrice: it.unit_price || it.unitPrice || 0, total: it.total || 0 })) : [],
-                            totalAmount: created.total_amount || created.totalAmount || 0,
-                            status: created.status || 'Pendiente',
-                            notes: created.notes || ''
-                        };
-
-                        setOrders(prev => [...prev, createdNormalized]);
-                        setNewOrder({ customerName: '', date: new Date().toISOString().split('T')[0], paymentMethod: '', items: [{ productName: '', quantity: 1, unitPrice: 0, total: 0 }], notes: '' });
-                        setShowAddOrder(false);
-                        setMessage('✅ Pedido de cliente registrado exitosamente.');
-                    } else {
-                        setMessage('⚠️ Pedido creado localmente, pero no se obtuvo confirmación del servidor.');
-                    }
-                } catch (err) {
-                    console.error('Error enviando pedido al backend:', err, err.response && err.response.data);
-                    setMessage('❌ Error guardando el pedido en el servidor. Revisar consola.');
-                }
-            };
-    
-            const handleUpdateOrderStatus = (orderId, newStatus) => {
-                setOrders(orders.map(order => 
-                    order.id === orderId 
-                        ? { ...order, status: newStatus }
-                        : order
-                ));
-            };
-    
-            return (
-                <div className="management-container">
-                    <h2>Gestión de Pedidos de Clientes</h2>
-                    {message && <p className="message">{message}</p>}
-                    {!showAddOrder ? (
-                        <button className="main-button" onClick={() => setShowAddOrder(true)}>Registrar Nuevo Pedido de Cliente</button>
-                    ) : (
-                        <form className="form-container" onSubmit={handleAddOrder}>
-                            <h3>Registrar Pedido de Cliente</h3>
-                            
-                            <input 
-                                type="text" 
-                                value={newOrder.customerName} 
-                                onChange={e => setNewOrder({ ...newOrder, customerName: e.target.value })} 
-                                placeholder="Nombre del cliente" 
-                                required
-                            />
-                            
-                            <input 
-                                type="date" 
-                                value={newOrder.date} 
-                                onChange={e => setNewOrder({ ...newOrder, date: e.target.value })} 
-                                required
-                            />
-                            
-                            <select 
-                                value={newOrder.paymentMethod} 
-                                onChange={e => setNewOrder({ ...newOrder, paymentMethod: e.target.value })} 
-                                required
-                            >
-                                <option value="">Seleccionar método de pago</option>
-                                <option value="efectivo">Efectivo</option>
-                                <option value="debito">Débito</option>
-                                <option value="credito">Crédito</option>
-                                <option value="transferencia">Transferencia</option>
-                            </select>
-                            
-                            <h4>Productos del Pedido</h4>
-                            
-                            {newOrder.items.map((item, index) => (
-                                <div key={index} className="order-item">
-                                    <div className="item-row">
-                                        <Select
-                                            options={products.map(p => ({ value: p.name, label: p.name }))}
-                                            value={products.map(p => ({ value: p.name, label: p.name })).find(opt => opt.value === item.productName) || null}
-                                            onChange={selectedOption => updateItem(index, 'productName', selectedOption ? selectedOption.value : '')}
-                                            placeholder="Buscar y seleccionar producto..."
-                                            isClearable
-                                        />
-                                        <input 
-                                            type="number" 
-                                            value={item.quantity || ''} 
-                                            onChange={e => {
-                                                const value = e.target.value === '' ? 0 : parseInt(e.target.value);
-                                                updateItem(index, 'quantity', isNaN(value) ? 0 : value);
-                                            }}
-                                            placeholder="Cantidad" 
-                                            min="1"
-                                            required 
-                                        />
-                                        <input 
-                                            type="number" 
-                                            value={item.unitPrice || ''} 
-                                            onChange={e => {
-                                                const value = e.target.value === '' ? 0 : parseFloat(e.target.value);
-                                                updateItem(index, 'unitPrice', isNaN(value) ? 0 : value);
-                                            }}
-                                            placeholder="Precio Unitario" 
-                                            min="0.01"
-                                            step="0.01"
-                                            required 
-                                        />
-                                        <span className="item-total">${safeToFixed(item.total)}</span>
-                                        {newOrder.items.length > 1 && (
-                                            <button 
-                                                type="button" 
-                                                onClick={() => removeItem(index)}
-                                                className="remove-item-button"
-                                            >
-                                                ❌
-                                            </button>
-                                        )}
-                                    </div>
-                                </div>
-                            ))}
-                            
-                            <button type="button" onClick={addItem} className="add-item-button">
-                                ➕ Agregar Producto
-                            </button>
-                            
-                            <textarea 
-                                value={newOrder.notes} 
-                                onChange={e => setNewOrder({ ...newOrder, notes: e.target.value })} 
-                                placeholder="Notas adicionales del pedido" 
-                            />
-                            
-                            <div className="purchase-total">
-                                <strong>Total del Pedido: ${safeToFixed(calculateOrderTotal())}</strong>
-                            </div>
-                            
-                            <div className="button-group">
-                                <button type="submit" className="action-button primary">Registrar Pedido</button>
-                                <button type="button" className="action-button secondary" onClick={() => setShowAddOrder(false)}>Cancelar</button>
-                            </div>
-                        </form>
-                    )}
-    
-                    <h3>Historial de Pedidos de Clientes</h3>
-                    <ul className="list-container">
-                        {orders.map(order => (
-                            <li key={order.id} className="order-list-item">
-                                <div className="order-header">
-                                    <strong>Pedido #{order.id} - {order.date}</strong>
-                                    <div className="order-status-controls">
-                                        <span className={`order-status ${order.status.toLowerCase()}`}>
-                                            {order.status}
-                                        </span>
-                                        <select 
-                                            value={order.status} 
-                                            onChange={e => handleUpdateOrderStatus(order.id, e.target.value)}
-                                            className="status-select"
-                                        >
-                                            <option value="Pendiente">Pendiente</option>
-                                            <option value="En Preparación">En Preparación</option>
-                                            <option value="Listo">Listo</option>
-                                            <option value="Entregado">Entregado</option>
-                                            <option value="Cancelado">Cancelado</option>
-                                        </select>
-                                    </div>
-                                </div>
-                                <div className="order-customer">
-                                    <strong>Cliente:</strong> {order.customerName}
-                                </div>
-                                <div className="order-payment">
-                                    <strong>Método de Pago:</strong> {order.paymentMethod}
-                                </div>
-                                <div className="order-items">
-                                    <strong>Productos solicitados:</strong>
-                                    <ul>
-                                        {order.items.map((item, index) => (
-                                            <li key={index}>
-                                                {item.productName} - {item.quantity || 0} unidades 
-                                                x ${safeToFixed(item.unitPrice)} = ${safeToFixed(item.total)}
-                                            </li>
-                                        ))}
-                                    </ul>
-                                </div>
-                                <div className="order-total-display">
-                                    <strong>Total: ${safeToFixed(order.totalAmount)}</strong>
-                                </div>
-                                {order.notes && (
-                                    <div className="order-notes">
-                                        <strong>Notas:</strong> {order.notes}
-                                    </div>
-                                )}
-                            </li>
-                        ))}
-                    </ul>
-                </div>
-            );
-        };
     
         // Mapeo de traducción para encabezados de tablas
         const headerTranslationMap = {
@@ -3347,7 +3121,6 @@ const PurchaseRequests = () => {
             'cuit': 'CUIT',
             'phone': 'Teléfono',
             'address': 'Dirección',
-            'products': 'Producto',
             'items': 'Insumo/Producto',
             'id': 'ID',
             'date': 'Fecha',
@@ -3380,8 +3153,7 @@ const PurchaseRequests = () => {
             'customer_name': 'Cliente',
             'paymentMethod': 'Método de Pago',
             'payment_method': 'Método de Pago',
-            'payment_method': 'Método de Pago',
-            'products': 'Producto/Insumo',
+            'products': 'Productos',
             'units': 'Unidades',
             'totalMovements': 'Total de Movimientos',
             'totalIncome': 'Ingresos Totales',
@@ -3389,404 +3161,65 @@ const PurchaseRequests = () => {
             'period': 'Período'
         };
 
+    
         // DataConsultation moved to `src/DataConsultation.js` to provide a stable identity
         // and avoid remounts caused by defining the component inline within App.
     
-        // Componente de la interfaz de edición de productos nuevos (solo para Gerente).
-        const EditNewProducts = () => {
-            const [selectedProduct, setSelectedProduct] = useState(null);
-            const [editingProduct, setEditingProduct] = useState({
-                name: '',
-                price: 0,
-                category: 'Producto',
-                stock: 0,
-                description: '',
-                lowStockThreshold: 10
-            });
-            const [message, setMessage] = useState('');
-            const [confirmDelete, setConfirmDelete] = useState(false);
-            const [deleteAllConfirm, setDeleteAllConfirm] = useState(false);
-    
-            // Función para validar el nombre del producto
-            const validateProductName = (name) => {
-                return name.trim().length > 0 && name.trim().length <= 100;
-            };
-    
-            // Función para validar el precio
-            const validatePrice = (price) => {
-                return price > 0;
-            };
-    
-            // Función para validar la categoría
-            const validateCategory = (category) => {
-                return ['Producto', 'Insumo'].includes(category);
-            };
-    
-            // Función para validar el stock
-            const validateStock = (stock) => {
-                return stock >= 0 && Number.isInteger(stock);
-            };
-            
-            // Función para validar el umbral de stock bajo
-            const validateLowStockThreshold = (threshold) => {
-                return threshold >= 0 && Number.isInteger(threshold);
-            };
-    
-            // Función para seleccionar un producto para editar
-            const selectProductForEdit = (product) => {
-                if (!product) {
-                    setMessage('⚠️ Producto no encontrado.');
-                    return;
-                }
-                setSelectedProduct(product);
-                setEditingProduct({
-                    name: product.name || '',
-                    price: product.price || 0,
-                    category: product.category || 'Producto',
-                    stock: product.stock || 0,
-                    description: product.description || '',
-                    lowStockThreshold: product.lowStockThreshold ?? product.low_stock_threshold ?? 10
-                });
-                setMessage('');
-            };
-
-            // Función para guardar cambios del producto seleccionado
-            const handleSaveChanges = async (e) => {
-                if (e && typeof e.preventDefault === 'function') e.preventDefault();
-                if (!selectedProduct) return;
-
-                if (!validatePrice(editingProduct.price)) {
-                    setMessage('🚫 Error: El precio debe ser un número decimal positivo mayor a cero.');
-                    return;
-                }
-
-                if (!validateCategory(editingProduct.category)) {
-                    setMessage('🚫 Error: La categoría debe existir en la lista de categorías registradas.');
-                    return;
-                }
-
-                if (!validateStock(editingProduct.stock)) {
-                    setMessage('🚫 Error: El stock inicial debe ser un número entero positivo o cero.');
-                    return;
-                }
-
-                if (!validateLowStockThreshold(editingProduct.lowStockThreshold)) {
-                    setMessage('🚫 Error: El umbral de stock bajo debe ser un número entero positivo o cero.');
-                    return;
-                }
-
-                if (!editingProduct.name.trim() || editingProduct.price <= 0 || !editingProduct.category) {
-                    setMessage('🚫 Error: No se pueden eliminar datos obligatorios (nombre, precio, categoría).');
-                    return;
-                }
-
-                try {
-                    const updatedProduct = {
-                        name: editingProduct.name,
-                        price: editingProduct.price,
-                        category: editingProduct.category,
-                        stock: editingProduct.stock,
-                        description: editingProduct.description,
-                        low_stock_threshold: editingProduct.lowStockThreshold
-                    };
-
-                    await api.put(`/products/${selectedProduct.id}/`, updatedProduct);
-                    await loadProducts();
-
-                    setSelectedProduct(null);
-                    setEditingProduct({
-                        name: '',
-                        price: 0,
-                        category: 'Producto',
-                        stock: 0,
-                        description: '',
-                        lowStockThreshold: 10
-                    });
-                    setMessage('✅ Producto actualizado correctamente en el servidor. Los cambios se reflejan en todas las secciones.');
-                } catch (error) {
-                    console.error('Error actualizando producto en el servidor:', error);
-                    if (error.response && error.response.data) {
-                        const errorData = error.response.data;
-                        if (typeof errorData === 'string') {
-                            setMessage(`❌ Error: ${errorData}`);
-                        } else if (errorData.detail) {
-                            setMessage(`❌ Error: ${errorData.detail}`);
-                        } else {
-                            setMessage('❌ Error: No se pudo actualizar el producto. Verifique los datos.');
-                        }
-                    } else {
-                        setMessage('❌ Error: No se pudo actualizar el producto en el servidor. Los cambios no fueron guardados.');
-                    }
-                }
-            };
-    
-            // Función para cancelar la edición
-            const handleCancelEdit = () => {
-                setSelectedProduct(null);
-                setEditingProduct({
-                    name: '',
-                    price: 0,
-                    category: 'Producto',
-                    stock: 0,
-                    description: '',
-                    lowStockThreshold: 10
-                });
-                setMessage('');
-                setConfirmDelete(false);
-            };
-            
-            // Función para eliminar un producto
-            const handleDeleteProduct = async () => {
-                if (!selectedProduct) return;
-                
-                // Si el producto tiene ventas, no se puede eliminar
-                if (selectedProduct.hasSales) {
-                    setMessage('⚠️ Error: No se puede eliminar un producto que ya tiene ventas registradas.');
-                    setConfirmDelete(false);
-                    return;
-                }
-                
-                if (!confirmDelete) {
-                    setConfirmDelete(true);
-                    setMessage('⚠️ ¿Estás seguro de que deseas eliminar este producto? Esta acción no se puede deshacer.');
-                    return;
-                }
-                
-                try {
-                    // Eliminar del backend primero
-                    await api.delete(`/products/${selectedProduct.id}/`);
-                    
-                    // Si se elimina correctamente del backend, eliminar del estado local
-                    const updatedProducts = products.filter(product => product.id !== selectedProduct.id);
-                    
-                    setProducts(updatedProducts);
-                    setSelectedProduct(null);
-                    setEditingProduct({
-                        name: '',
-                        price: 0,
-                        category: 'Producto',
-                        stock: 0,
-                        description: '',
-                        lowStockThreshold: 10
-                    });
-                    setConfirmDelete(false);
-                    setMessage('✅ Producto eliminado correctamente del servidor y todas las secciones.');
-                } catch (error) {
-                    console.error('Error eliminando producto del servidor:', error);
-                    setMessage('❌ Error: No se pudo eliminar el producto del servidor. El producto permanece en el sistema.');
-                    setConfirmDelete(false);
-                }
-            };
-            
-            // Función para eliminar todos los productos
-            const handleDeleteAllProducts = async () => {
-                if (!deleteAllConfirm) {
-                    setDeleteAllConfirm(true);
-                    setMessage('⚠️ ¿Estás seguro de que deseas eliminar TODOS los productos sin ventas? Esta acción no se puede deshacer.');
-                    return;
-                }
-                
-                try {
-                    // Obtener productos sin ventas que se pueden eliminar
-                    const productsToDelete = products.filter(product => !product.hasSales);
-                    
-                    // Eliminar cada producto del backend
-                    const deletePromises = productsToDelete.map(product => 
-                        api.delete(`/products/${product.id}/`)
-                    );
-                    
-                    await Promise.all(deletePromises);
-                    
-                    // Si se eliminan correctamente del backend, actualizar estado local
-                    const productsWithSales = products.filter(product => product.hasSales);
-                    
-                    setProducts(productsWithSales);
-                    setDeleteAllConfirm(false);
-                    setMessage(`✅ ${productsToDelete.length} productos eliminados correctamente del servidor y todas las secciones.`);
-                } catch (error) {
-                    console.error('Error eliminando productos del servidor:', error);
-                    setMessage('❌ Error: No se pudieron eliminar todos los productos del servidor.');
-                    setDeleteAllConfirm(false);
-                }
-            };
-    
-            // Obtener solo productos nuevos (sin ventas registradas)
-            const newProducts = products.filter(product => !product.hasSales);
-    
-            return (
-                <div className="management-container">
-                    <div style={{marginBottom: '10px'}}>
-                        <h2>Editar Productos Nuevos</h2>
-                    </div>
-                    {message && <p className="message">{message}</p>}
-                    
-                    <div className="products-list">
-                        <h3>Productos Disponibles para Edición</h3>
-                        <p className="info-text">
-                            Solo se muestran productos marcados como "nuevos" o sin ventas registradas.
-                        </p>
-                        
-                        {newProducts.length === 0 ? (
-                            <p className="no-products">No hay productos nuevos disponibles para editar.</p>
-                        ) : (
-                            <ul className="list-container">
-                                {newProducts.map(product => (
-                                    <li key={product.id} className="product-list-item">
-                                        <div className="product-info">
-                                            <strong>{product.name}</strong>
-                                            <span className="product-price">${product.price}</span>
-                                            <span className="product-category">{product.category}</span>
-                                            <span className="product-stock">Stock: {product.stock}</span>
-                                            <span className="product-threshold">Umbral Stock Bajo: {product.lowStockThreshold || 10}</span>
-                                            {product.description && (
-                                                <span className="product-description">{product.description}</span>
-                                            )}
-                                        </div>
-                                        <button 
-                                            onClick={() => selectProductForEdit(product)}
-                                            className="edit-button"
-                                            disabled={selectedProduct?.id === product.id}
-                                        >
-                                            {selectedProduct?.id === product.id ? 'Editando...' : 'Editar'}
-                                        </button>
-                                    </li>
-                                ))}
-                            </ul>
-                        )}
-                    </div>
-    
-                    {selectedProduct && (
-                        <div className="edit-form">
-                            <h3>Editar Producto: {selectedProduct.name}</h3>
-                            
-                            <form onSubmit={handleSaveChanges} className="form-container">
-                                <div className="form-group">
-                                    <label>Nombre del Producto *</label>
-                                    <input 
-                                        type="text" 
-                                        value={editingProduct.name} 
-                                        onChange={e => setEditingProduct({...editingProduct, name: e.target.value})} 
-                                        placeholder="Nombre del producto (máximo 100 caracteres)"
-                                        maxLength="100"
-                                        required 
-                                    />
-                                </div>
-                                
-                                <div className="form-group">
-                                    <label>Precio *</label>
-                                    <input 
-                                        type="number" 
-                                        value={editingProduct.price} 
-                                        onChange={e => setEditingProduct({...editingProduct, price: parseFloat(e.target.value)})} 
-                                        placeholder="Precio (mayor a 0)"
-                                        min="0.01"
-                                        step="0.01"
-                                        required 
-                                    />
-                                </div>
-                                
-                                <div className="form-group">
-                                    <label>Categoría *</label>
-                                    <select 
-                                        value={editingProduct.category} 
-                                        onChange={e => setEditingProduct({...editingProduct, category: e.target.value})}
-                                        required
-                                    >
-                                        <option value="Producto">Producto</option>
-                                        <option value="Insumo">Insumo</option>
-                                    </select>
-                                </div>
-                                
-                                <div className="form-group">
-                                    <label>Stock Inicial</label>
-                                    <input 
-                                        type="number" 
-                                        value={editingProduct.stock} 
-                                        onChange={e => setEditingProduct({...editingProduct, stock: parseInt(e.target.value)})} 
-                                        placeholder="Stock inicial (0 o mayor)"
-                                        min="0"
-                                        required 
-                                    />
-                                </div>
-                                
-                                <div className="form-group">
-                                    <label>Descripción</label>
-                                    <textarea 
-                                        value={editingProduct.description} 
-                                        onChange={e => setEditingProduct({...editingProduct, description: e.target.value})} 
-                                        placeholder="Descripción del producto (opcional)"
-                                        rows="3"
-                                    />
-                                </div>
-                                
-                                <div className="form-group">
-                                    <label>Umbral de Stock Bajo *</label>
-                                    <input 
-                                        type="number" 
-                                        value={editingProduct.lowStockThreshold} 
-                                        onChange={e => setEditingProduct({...editingProduct, lowStockThreshold: parseInt(e.target.value)})} 
-                                        placeholder="Nivel de stock para mostrar alertas (0 o mayor)"
-                                        min="0"
-                                        required 
-                                    />
-                                    <small className="form-helper-text">
-                                        Cantidad mínima de stock antes de mostrar alertas en el Dashboard
-                                    </small>
-                                </div>
-                                
-                                <div className="button-group">
-                                    <button type="submit" className="action-button primary">
-                                        Guardar Cambios
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={handleCancelEdit}
-                                        className="action-button secondary"
-                                    >
-                                        Cancelar
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={handleDeleteProduct}
-                                        className="action-button delete"
-                                    >
-                                        {confirmDelete ? "Confirmar Eliminación" : "Eliminar Producto"}
-                                    </button>
-                                </div>
-                            </form>
-                        </div>
-                    )}
-                    
-                    <div className="manage-all-products">
-                        <button 
-                            onClick={handleDeleteAllProducts}
-                            className="action-button delete-all"
-                            disabled={newProducts.length === 0}
-                        >
-                            {deleteAllConfirm ? "Confirmar Eliminación de Todos" : "Eliminar Todos los Productos Sin Ventas"}
-                        </button>
-                    </div>
-            </div>
-        )};
-
         const LowStockReport = () => {
-            const [productId, setProductId] = useState('');
+            const [selectedProducts, setSelectedProducts] = useState([{ id: '', product: null }]);
             const [message, setMessage] = useState('');
             const [notification, setNotification] = useState('');
         
+            // Función para formatear el stock con la unidad apropiada
+            const formatStock = (stock, unit) => {
+                if (!unit) return stock;
+                
+                switch(unit.toLowerCase()) {
+                    case 'g':
+                        return `${(stock / 1000).toFixed(2)} Kg`;
+                    case 'ml':
+                        return `${(stock / 1000).toFixed(2)} L`;
+                    case 'u':
+                        return `${Math.round(stock)} U`;
+                    default:
+                        return `${stock} ${unit}`;
+                }
+            };
+        
+            const handleAddProduct = () => {
+                setSelectedProducts([...selectedProducts, { id: Date.now(), product: null }]);
+            };
+            
+            const handleRemoveProduct = (id) => {
+                if (selectedProducts.length > 1) {
+                    setSelectedProducts(selectedProducts.filter(p => p.id !== id));
+                }
+            };
+            
+            const handleProductChange = (id, option) => {
+                setSelectedProducts(selectedProducts.map(p => 
+                    p.id === id ? { ...p, product: option } : p
+                ));
+            };
+        
             const handleSubmit = async (e) => {
                 e.preventDefault();
-                if (!productId || !message) {
-                    setNotification('Por favor, selecciona un producto y escribe un mensaje.');
+                const validProducts = selectedProducts.filter(p => p.product && p.product.value);
+                
+                if (validProducts.length === 0 || !message) {
+                    setNotification('Por favor, selecciona al menos un producto/insumo y escribe un mensaje.');
                     return;
                 }
+                
                 try {
+                    // Enviar un solo reporte con múltiples productos
                     await api.post('/low-stock-reports/create/', {
-                        product: productId,
+                        product_ids: validProducts.map(p => p.product.value),
                         message: message,
                     });
-                    setNotification('Reporte enviado con éxito.');
-                    setProductId('');
+                    
+                    setNotification(`Reporte con ${validProducts.length} producto(s)/insumo(s) enviado con éxito.`);
+                    setSelectedProducts([{ id: Date.now(), product: null }]);
                     setMessage('');
                 } catch (error) {
                     setNotification('Error al enviar el reporte.');
@@ -3799,12 +3232,71 @@ const PurchaseRequests = () => {
                     <h2>Reportar Faltantes o Bajo Stock</h2>
                     {notification && <p className="message">{notification}</p>}
                     <form onSubmit={handleSubmit} className="form-container">
-                        <Select
-                            options={products.map(p => ({ value: p.id, label: `${p.name} (Stock: ${p.stock})` }))}
-                            onChange={(option) => setProductId(option ? option.value : '')}
-                            placeholder="Selecciona un producto"
-                            isClearable
-                        />
+                        <div style={{ marginBottom: '20px' }}>
+                            <div style={{
+                                display: 'grid',
+                                gridTemplateColumns: window.innerWidth >= 2560 ? 'repeat(7, 1fr)' :
+                                                   window.innerWidth >= 1900 ? 'repeat(6, 1fr)' :
+                                                   window.innerWidth >= 1600 ? 'repeat(5, 1fr)' :
+                                                   window.innerWidth >= 1400 ? 'repeat(4, 1fr)' :
+                                                   window.innerWidth >= 1200 ? 'repeat(3, 1fr)' :
+                                                   window.innerWidth >= 740 ? 'repeat(2, 1fr)' : '1fr',
+                                gap: '15px',
+                                marginBottom: '15px'
+                            }}>
+                                {selectedProducts.map((item, index) => (
+                                    <div key={item.id} style={{ position: 'relative' }}>
+                                        <Select
+                                            value={item.product}
+                                            options={products.map(p => ({ 
+                                                value: p.id, 
+                                                label: p.name,
+                                                category: p.category
+                                            }))}
+                                            onChange={(option) => handleProductChange(item.id, option)}
+                                            placeholder="Selecciona producto/insumo"
+                                            isClearable
+                                            isSearchable
+                                        />
+                                        {selectedProducts.length > 1 && (
+                                            <button
+                                                type="button"
+                                                onClick={() => handleRemoveProduct(item.id)}
+                                                style={{
+                                                    position: 'absolute',
+                                                    top: '-10px',
+                                                    right: '-10px',
+                                                    width: '25px',
+                                                    height: '25px',
+                                                    borderRadius: '50%',
+                                                    border: 'none',
+                                                    backgroundColor: '#dc3545',
+                                                    color: 'white',
+                                                    cursor: 'pointer',
+                                                    fontSize: '16px',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    padding: 0,
+                                                    zIndex: 10
+                                                }}
+                                                title="Eliminar"
+                                            >
+                                                ×
+                                            </button>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                            <button
+                                type="button"
+                                onClick={handleAddProduct}
+                                className="action-button secondary"
+                                style={{ marginTop: '10px' }}
+                            >
+                                + Agregar otro producto/insumo
+                            </button>
+                        </div>
                         <textarea
                             value={message}
                             onChange={(e) => setMessage(e.target.value)}
@@ -3818,73 +3310,23 @@ const PurchaseRequests = () => {
             );
         };
         
-        const ViewLowStockReports = () => {
-            const [reports, setReports] = useState([]);
-            const [loading, setLoading] = useState(true);
-            const [error, setError] = useState('');
-        
-            useEffect(() => {
-                const fetchReports = async () => {
-                    try {
-                        const response = await api.get('/low-stock-reports/');
-                        setReports(response.data);
-                    } catch (err) {
-                        setError('No se pudieron cargar los reportes.');
-                        console.error('Error fetching low stock reports:', err);
-                    } finally {
-                        setLoading(false);
-                    }
-                };
-                fetchReports();
-            }, []);
-        
-            const handleResolve = async (reportId) => {
-                try {
-                    await api.patch(`/low-stock-reports/${reportId}/update/`, { is_resolved: true });
-                    setReports(reports.map(r => r.id === reportId ? { ...r, is_resolved: true } : r));
-                } catch (err) {
-                    setError('Error al marcar como resuelto.');
-                    console.error('Error resolving report:', err);
-                }
-            };
-        
-            if (loading) return <div>Cargando reportes...</div>;
-            if (error) return <div className="error-message">{error}</div>;
-
-            return (
-                <div className="management-container">
-                    <h2>Reportes de Faltantes y Bajo Stock</h2>
-                    <ul className="list-container">
-                        {reports.map(report => (
-                            <li key={report.id} className={`list-item ${report.is_resolved ? 'resolved' : ''}`}>
-                                <div className="report-info">
-                                    <strong>Producto:</strong> {report.product_name} <br />
-                                    <strong>Reportado por:</strong> {report.reported_by} el {new Date(report.created_at).toLocaleString()} <br />
-                                    <strong>Mensaje:</strong> {report.message}
-                                </div>
-                                <div className="report-actions">
-                                    {report.is_resolved ? (
-                                        <span>Resuelto</span>
-                                    ) : (
-                                        <button onClick={() => handleResolve(report.id)} className="action-button primary">Marcar como Resuelto</button>
-                                    )}
-                                </div>
-                            </li>
-                        ))}
-                    </ul>
-                </div>
-            );
-        };
-
     // Renderiza el componente de la página actual según el estado.
     const renderPage = () => {
+        // Always allow forgot-password page even when not logged in
+        if (currentPage === 'forgot-password') {
+                // Siempre regresar a la pantalla de login al cancelar desde "Olvidé mi contraseña",
+                // sin depender del estado `isLoggedIn` que puede cambiar al restaurar sesión
+                // cuando la pestaña recibe foco.
+                return <ForgotPassword onDone={() => setCurrentPage('login')} />;
+            }
+
         if (!isLoggedIn) {
             return <Login />;
         }
 
         // Defensive: ensure currentPage is a known page when logged in to avoid falling
         // into the default case which renders the "Página no encontrada." message
-        const validPages = new Set(['dashboard','inventario','ventas','productos','gestión de usuarios','proveedores','compras','pedidos','consultas', 'datos de mi usuario', 'editar productos','login', 'reportar faltantes', 'ver reportes de faltantes']);
+    const validPages = new Set(['dashboard','inventario','ventas','productos','gestión de usuarios','proveedores','compras','pedidos','consultas', 'datos de mi usuario', 'edicion','login', 'reportar faltantes', 'ver reportes de faltantes', 'gestión de pérdidas', 'generate-token']);
         let pageToRender = currentPage;
         if (!validPages.has(String(currentPage))) {
             console.warn('⚠️ currentPage inválido detectado, forzando a dashboard:', currentPage);
@@ -3900,9 +3342,20 @@ const PurchaseRequests = () => {
                 return <SalesView />;
           
             case 'productos':
-                return userRole === 'Gerente' ? <ProductCreationView /> : <div>Acceso Denegado</div>;
+                return userRole === 'Gerente' ? <ProductManagement 
+                    userRole={userRole}
+                    products={products}
+                    inventory={inventory}
+                    loadProducts={loadProducts}
+                    ProductCreationViewComponent={ProductCreationViewComponent}
+                /> : <ProductCreationViewComponent />;
             case 'gestión de usuarios':
-                return userRole === 'Gerente' ? <UserManagement /> : <div>Acceso Denegado</div>;
+                return <UserManagement 
+                    users={users}
+                    loadUsers={loadUsers}
+                    userRole={userRole}
+                />;
+            // legacy token generation view removed
             case 'proveedores':
                 return userRole === 'Gerente' ? <SupplierManagement /> : <div>Acceso Denegado</div>;
             case 'compras':
@@ -3917,7 +3370,9 @@ const PurchaseRequests = () => {
                         reloadProducts={loadProducts}
                     /> : <div>Acceso Denegado</div>;
             case 'pedidos':
-                return userRole === 'Gerente' ? <OrderManagement /> : <div>Acceso Denegado</div>;
+                return userRole === 'Gerente' ? (
+                    <Pedidos orders={orders} setOrders={setOrders} products={products} />
+                ) : <div>Acceso Denegado</div>;
             case 'consultas':
                 return <DataConsultation 
                     api={api}
@@ -3934,12 +3389,31 @@ const PurchaseRequests = () => {
                 />;
             case 'datos de mi usuario':
                 return <MyUserData />;
-            case 'editar productos':
-                return userRole === 'Gerente' ? <EditNewProducts /> : <div>Acceso Denegado</div>;
+            case 'edicion':
+                return userRole === 'Gerente' ? (
+                    <Edicion
+                        products={products}
+                        setProducts={setProducts}
+                        loadProducts={loadProducts}
+                        isLoading={isLoading}
+                    />
+                ) : <div>Acceso Denegado</div>;
             case 'reportar faltantes':
                 return <LowStockReport />;
             case 'ver reportes de faltantes':
-                return userRole === 'Gerente' ? <ViewLowStockReports /> : <div>Acceso Denegado</div>;
+                return userRole === 'Gerente' ? <Ver_Reportes_De_Faltantes products={products} /> : <div>Acceso Denegado</div>;
+            case 'gestión de pérdidas':
+                return ['Gerente', 'Encargado'].includes(userRole) ? 
+                    <LossManagement 
+                        products={products}
+                        userRole={userRole}
+                        loadProducts={loadProducts}
+                    /> : <div>Acceso Denegado</div>;
+            case 'login':
+                // Permitir renderizar la pantalla de login incluso cuando la aplicación
+                // detecta que está logueada en otra pestaña; esto evita que "Cancelar"
+                // desde 'forgot-password' lleve al default (Página no encontrada).
+                return <Login />;
             default:
                 return <div>Página no encontrada.</div>;
         }
@@ -3956,7 +3430,7 @@ const PurchaseRequests = () => {
                         const retryToken = getInMemoryToken();
             if (retryToken && isLoggedIn) {
               loadUsers();
-              loadProducts();
+              loadProducts(false); // Carga silenciosa en retry
               console.log('🔐 Usuario logueado - cargando usuarios y productos del servidor (retry)');
             }
           }, 200);
@@ -3965,7 +3439,7 @@ const PurchaseRequests = () => {
         
         // Cargar datos del servidor
         loadUsers();
-        loadProducts();
+        loadProducts(false); // Carga silenciosa al hacer login
         console.log('🔐 Usuario logueado - cargando usuarios y productos del servidor');
       }
     }, [isLoggedIn]);
@@ -4017,8 +3491,8 @@ const PurchaseRequests = () => {
           const recentInteraction = now - lastInteraction < 120000; // 2 minutos
           
           if (!isTyping && !hasOpenForms && !recentInteraction && !(isInConsultationPage && hasQueryResults)) {
-            loadProducts();
-            console.log('🔄 Sincronización automática de productos');
+            loadProducts(false); // Sincronización silenciosa automática
+            // Sincronización automática de productos
           } else {
             console.log('⏸️ Sincronización pausada - usuario activo:', {
               typing: isTyping,
@@ -4101,7 +3575,7 @@ const PurchaseRequests = () => {
             const now = Date.now();
             
             if (now - lastSync > 30000) { // 30 segundos
-              loadProducts();
+              loadProducts(false); // false = no mostrar mensaje de carga
               window.lastFocusSync = now;
               console.log('👁️ Ventana enfocada - sincronizando productos (sin formularios abiertos)');
             } else {
@@ -4139,7 +3613,7 @@ const PurchaseRequests = () => {
             const now = Date.now();
             
             if (now - lastSync > 30000) { // 30 segundos
-              loadProducts();
+              loadProducts(false); // Sincronización silenciosa
               window.lastVisibilitySync = now;
               console.log('👁️ Pestaña visible - sincronizando productos (sin formularios abiertos)');
             }
@@ -4173,10 +3647,31 @@ const PurchaseRequests = () => {
         <div className="app-container">
             {/* Panel de desarrollo "DEV STATUS" eliminado para UI limpia. */}
             {showModal && <LockedAccountModal />}
-            {isLoggedIn && <Navbar />}
+            {/* Mostrar la barra superior SOLO cuando el usuario esté autenticado y
+                no estemos en páginas públicas como 'forgot-password' o 'login'.
+                Evita que la barra azul aparezca en la pantalla de inicio de sesión. */}
+            {isLoggedIn && !['forgot-password', 'login'].includes(currentPage) && <Navbar />}
             {renderPage()}
+            
+            {/* Diálogo de Pedidos */}
+            {isPedDialogoOpen && (
+                <PedDialogo
+                    orders={orders}
+                    setOrders={setOrders}
+                    isOpen={isPedDialogoOpen}
+                    onClose={handleClosePedDialogo}
+                    onMinimize={handleMinimizePedDialogo}
+                    isMinimized={isPedDialogoMinimized}
+                    onOpenNewTab={handleOpenPedDialogoNewTab}
+                    isFullscreen={isPedDialogoFullscreen}
+                />
+            )}
         </div>
     );
+    } catch (error) {
+        console.error('❌ Error de render en App:', error);
+        throw error; // Re-throw para que ErrorBoundary lo atrape
+    }
     };
 
 export default App;

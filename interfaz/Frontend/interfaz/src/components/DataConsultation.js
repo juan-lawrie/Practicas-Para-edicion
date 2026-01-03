@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { getPurchaseHistory } from '../services/api';
+import { formatMovementDate } from '../utils/date';
 
 const PurchaseHistory = () => {
     const [history, setHistory] = useState([]);
@@ -43,14 +44,14 @@ const PurchaseHistory = () => {
                     {history.map(purchase => (
                         <li key={purchase.id} className="purchase-list-item">
                             <div className="purchase-header">
-                                <strong>Compra #{purchase.id} - {new Date(purchase.created_at).toLocaleDateString()}</strong>
+                                <strong>Compra #{purchase.id} - {formatMovementDate(purchase.created_at)}</strong>
                                 <div>
                                     <span>Solicitado por: {purchase.user}</span>
                                 </div>
                             </div>
                             <div className="purchase-details">
                                 <p><strong>Proveedor:</strong> {purchase.supplier}</p>
-                                <p><strong>Aprobado por:</strong> {purchase.approved_by} el {new Date(purchase.approved_at).toLocaleDateString()}</p>
+                                <p><strong>Aprobado por:</strong> {purchase.approved_by} el {formatMovementDate(purchase.approved_at)}</p>
                             </div>
                             <div className="purchase-items">
                                 <strong>Items:</strong>

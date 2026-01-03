@@ -1,30 +1,43 @@
 {
-  "short_name": "Churro App",
   "name": "Proyecto Churro - Sistema de Gestión",
+  "short_name": "Churrería",
+  "description": "Sistema integral de gestión para churrería",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2d3748",
+  "orientation": "portrait",
+  "scope": "/",
   "icons": [
     {
-      "src": "Icono_Churreria.ico",
-      "sizes": "64x64 32x32 24x24 16x16",
-      "type": "image/x-icon"
-    },
-    {
-      "src": "Icono_Churreria.ico",
-      "sizes": "64x64 32x32 24x24 16x16",
-      "type": "image/x-icon"
-    },
-    {
-      "src": "Icono_Churreria.ico",
+      "src": "Churreria.png",
+      "sizes": "225x225",
       "type": "image/png",
-      "sizes": "192x192"
+      "purpose": "any"
     },
     {
-      "src": "Icono_Churreria.ico",
+      "src": "Churreria.png",
+      "sizes": "225x225",
       "type": "image/png",
-      "sizes": "512x512"
+      "purpose": "maskable"
+    },
+    {
+      "src": "icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-180x180.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
     }
-  ],
-  "start_url": ".",
-  "display": "standalone",
-  "theme_color": "#000000",
-  "background_color": "#ffffff"
+  ]
 }

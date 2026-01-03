@@ -1,5 +1,6 @@
 
 import React from 'react';
+import { formatMovementDate } from '../utils/date';
 
 const PurchaseRequests = ({ purchases, onApprove, onReject, userRole }) => {
     return (
@@ -16,7 +17,7 @@ const PurchaseRequests = ({ purchases, onApprove, onReject, userRole }) => {
                                     <strong>Proveedor:</strong> {purchase.supplier_name || 'N/A'}
                                 </div>
                                 <div>
-                                    <strong>Fecha:</strong> {new Date(purchase.created_at).toLocaleDateString()}
+                                    <strong>Fecha:</strong> {formatMovementDate(purchase.created_at)}
                                 </div>
                                 <div>
                                     <strong>Total:</strong> ${(purchase.total || purchase.total_amount || 0).toFixed(2)}

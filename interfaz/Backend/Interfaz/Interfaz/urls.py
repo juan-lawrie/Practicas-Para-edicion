@@ -26,12 +26,10 @@ from api.views import (
     UserListCreate, UserDestroy, login_view, ExportDataView,
     UserQueryViewSet, SupplierViewSet, UserStorageViewSet, CurrentUserView,
     LowStockReportCreateView, LowStockReportListView, LowStockReportUpdateView,
-    RecipeIngredientViewSet
+    RecipeIngredientViewSet, ProductProductionView, LossRecordViewSet,
+    get_ingredients_with_suggested_unit, refresh_from_cookie, logout_view,
+    RoleViewSet, PurchaseViewSet, OrderViewSet, ProductionViewSet
 )
-from api.views import RoleViewSet
-from api.views import PurchaseViewSet, OrderViewSet, refresh_from_cookie, logout_view
-from api.views import PurchaseViewSet
-from api.views import OrderViewSet
 from django.shortcuts import redirect
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
@@ -53,6 +51,8 @@ router.register(r'orders', OrderViewSet, basename='order')
 router.register(r'suppliers', SupplierViewSet, basename='supplier')
 router.register(r'inventory-change-audits', __import__('api.views', fromlist=['InventoryChangeAuditViewSet']).InventoryChangeAuditViewSet, basename='inventory-change-audit')
 router.register(r'recipe-ingredients', RecipeIngredientViewSet, basename='recipe-ingredient')
+router.register(r'loss-records', LossRecordViewSet, basename='loss-record')
+router.register(r'productions', ProductionViewSet, basename='production')
 
 
 def root_redirect(request):
@@ -62,12 +62,15 @@ urlpatterns = [
     path('', root_redirect),
     path('admin/', admin.site.urls),
     # URLs específicas primero para evitar conflictos
+    path('api/products/produce/', ProductProductionView.as_view(), name='product-production'),
+    path('api/ingredients/suggested-units/', get_ingredients_with_suggested_unit, name='ingredients-suggested-units'),
     path('api/users/me/', CurrentUserView.as_view(), name='user-me'),
     path('api/users/create/', UserListCreate.as_view(), name='user-list-create'),
     path('api/users/<int:pk>/delete/', UserDestroy.as_view(), name='user-delete'),
     path('api/sales/create/', SaleCreate.as_view(), name='sale-create'),
     # Legacy login endpoint used by the app (email/password) - keeps custom behavior
     path('api/auth/login/', login_view, name='login'),
+    path('api/auth/reset-with-token/', __import__('api.views', fromlist=['reset_with_token']).reset_with_token, name='reset-with-token'),
     # Standard JWT token endpoints expected by the frontend
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),

@@ -5,9 +5,12 @@
 // Resultado: 404 Cannot POST /auth/login/.
 
 const API_CONFIG = {
-  // En desarrollo usamos el proxy del dev server (package.json -> proxy) para evitar CORS
-  baseURL: '/api',
+  // Configuración para apuntar directamente al servidor Django
+  baseURL: 'http://localhost:8000/api',
   timeout: 10000
 };
+
+// HCAPTCHA site key para el frontend. Reemplazar por la clave real en producción.
+API_CONFIG.hcaptchaSiteKey = '10000000-ffff-ffff-ffff-000000000001';
 
 export default API_CONFIG;

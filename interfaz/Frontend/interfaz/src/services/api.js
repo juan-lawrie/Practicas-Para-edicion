@@ -152,6 +152,28 @@ const getIngredients = () => {
   return api.get('/products/?is_ingredient=true');
 };
 
+const produceProduct = (productId, quantity) => {
+  return api.post('/products/produce/', { product_id: productId, quantity });
+};
+
+const getIngredientsWithSuggestedUnit = () => {
+  return api.get('/ingredients/suggested-units/');
+};
+
+// Resetear contraseña (flujo sin captcha)
+const resetWithToken = ({ email, new_password }) => {
+  return api.post('/auth/reset-with-token/', { email, new_password });
+};
+
+// Funciones para la gestión de pedidos
+const updateOrderStatus = (orderId, status) => {
+  return api.patch(`/orders/${orderId}/`, { status });
+};
+
+// === FUNCIONES OFFLINE ===
+
+
+
 export default api;
 
 // Exportar los helpers públicos (incluyendo setters para el token en memoria)
@@ -170,5 +192,9 @@ export {
   addRecipeIngredient,
   updateRecipeIngredient,
   deleteRecipeIngredient,
-  getIngredients
+  getIngredients,
+  getIngredientsWithSuggestedUnit,
+  produceProduct,
+  resetWithToken,
+  updateOrderStatus
 };

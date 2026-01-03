@@ -1,10 +1,13 @@
 # backend/api/serializers.py
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
+import math
 from .models import (
     Product, CashMovement, InventoryChange, Sale, SaleItem, Role, 
-    UserQuery, Supplier, UserStorage, LowStockReport, RecipeIngredient
+    UserQuery, Supplier, UserStorage, LowStockReport, RecipeIngredient, LossRecord,
+    Production, ProductionItem
 )
+from .models import ResetToken
 from .models import Purchase
 from .models import Order, OrderItem
 
@@ -36,8 +39,18 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'role', 'role_id', 'is_active')
-        read_only_fields = ('is_active',)
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'role_id', 'is_active', 'is_locked', 'failed_login_attempts', 'locked_at', 'lock_type')
+        read_only_fields = ('is_active', 'is_locked', 'failed_login_attempts', 'locked_at', 'lock_type')
+
+
+class ResetTokenSerializer(serializers.ModelSerializer):
+    target_email = serializers.ReadOnlyField(source='target_user.email')
+    generated_by_username = serializers.ReadOnlyField(source='generated_by.username')
+
+    class Meta:
+        model = ResetToken
+        fields = ('id', 'target_user', 'target_email', 'generated_by', 'generated_by_username', 'created_at', 'expires_at', 'used')
+        read_only_fields = ('id', 'target_user', 'target_email', 'generated_by', 'generated_by_username', 'created_at', 'expires_at', 'used')
 
 # Serializer para que el Gerente actualice usuarios (SIN CONTRASEÑA)
 class UserUpdateSerializer(serializers.ModelSerializer):
@@ -47,16 +60,28 @@ class UserUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('username', 'email', 'role_id', 'is_active')
+        fields = ('username', 'email', 'first_name', 'last_name', 'role_id', 'is_active', 'password')
         extra_kwargs = {
             'username': {'required': False},
             'email': {'required': False},
-            'is_active': {'required': False}
+            'first_name': {'required': False},
+            'last_name': {'required': False},
+            'is_active': {'required': False},
+            'password': {'write_only': True, 'required': False}
         }
 
     def update(self, instance, validated_data):
-        # El rol se maneja a través de role_id
+        # Manejar la contraseña por separado si se proporciona
+        password = validated_data.pop('password', None)
+        
+        # Actualizar otros campos
         instance = super().update(instance, validated_data)
+        
+        # Si se proporcionó una nueva contraseña, actualizarla
+        if password:
+            instance.set_password(password)
+            instance.save()
+        
         return instance
 
 
@@ -66,7 +91,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = User
-        fields = ('username', 'email', 'password', 'role_name')
+        fields = ('username', 'email', 'first_name', 'last_name', 'password', 'role_name')
         extra_kwargs = {'password': {'write_only': True}}
 
     def create(self, validated_data):
@@ -79,6 +104,8 @@ class UserCreateSerializer(serializers.ModelSerializer):
             username=validated_data['username'],
             email=validated_data['email'],
             password=validated_data['password'],
+            first_name=validated_data.get('first_name', ''),
+            last_name=validated_data.get('last_name', ''),
             role=role
         )
         return user
@@ -106,7 +133,26 @@ class ProductSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Product
-        fields = ['id', 'name', 'description', 'price', 'stock', 'low_stock_threshold', 'category', 'is_ingredient', 'unit', 'recipe', 'recipe_ingredients', 'estado']
+        fields = ['id', 'name', 'description', 'price', 'stock', 'recipe_yield', 'loss_rate', 'low_stock_threshold', 'high_stock_multiplier', 'category', 'is_ingredient', 'unit', 'recipe', 'recipe_ingredients', 'estado']
+
+    def validate_recipe_yield(self, value):
+        try:
+            v = int(value)
+        except Exception:
+            raise serializers.ValidationError('Rendimiento de la receta inválido')
+        if v < 1:
+            raise serializers.ValidationError('Rendimiento de la receta debe ser al menos 1')
+        # Verificar que el valor se está procesando correctamente
+        return v
+
+    def validate_loss_rate(self, value):
+        try:
+            v = float(value)
+        except Exception:
+            raise serializers.ValidationError('Tasa de pérdida inválida')
+        if v < 0 or v > 1:
+            raise serializers.ValidationError('Tasa de pérdida debe estar entre 0% y 100% (0.0 - 1.0)')
+        return value
 
     def get_estado(self, obj):
         # Lógica: Activo si stock > 0, Inactivo si stock == 0
@@ -115,12 +161,12 @@ class ProductSerializer(serializers.ModelSerializer):
         return 'Inactivo'
     
     def validate_name(self, value):
-        if not value or not value.strip():
+        if value is not None and (not value or not value.strip()):
             raise serializers.ValidationError("El nombre del producto es obligatorio.")
-        return value.strip()
+        return value.strip() if value else value
     
     def validate_price(self, value):
-        if value <= 0:
+        if value is not None and value <= 0:
             raise serializers.ValidationError("El precio debe ser mayor a 0.")
         return value
     
@@ -131,7 +177,12 @@ class ProductSerializer(serializers.ModelSerializer):
     
     def validate_low_stock_threshold(self, value):
         if value < 0:
-            raise serializers.ValidationError("El umbral de stock bajo no puede ser negativo.")
+            raise serializers.ValidationError('El umbral de stock bajo no puede ser negativo.')
+        return value
+    
+    def validate_high_stock_multiplier(self, value):
+        if value <= 1:
+            raise serializers.ValidationError('El multiplicador de stock alto debe ser mayor a 1.')
         return value
 
     def create(self, validated_data):
@@ -148,37 +199,75 @@ class ProductSerializer(serializers.ModelSerializer):
                 RecipeIngredient.objects.create(product=product, **item_data)
 
             # If the created product has an initial stock, deduct ingredients from inventory
-            if initial_stock > 0:
+            if initial_stock > 0 and recipe_data:
+                # Determine recipe_yield (units per lote)
+                try:
+                    recipe_yield = int(validated_data.get('recipe_yield', 1))
+                    if recipe_yield < 1:
+                        recipe_yield = 1
+                except Exception:
+                    recipe_yield = 1
+
+                # Calcular cuánto de cada insumo se necesita proporcionalmente
+                # Si initial_stock < recipe_yield se usa la fracción (initial_stock / recipe_yield)
+                try:
+                    initial_stock_float = float(initial_stock)
+                except Exception:
+                    initial_stock_float = 0.0
+
+                multiplier = (initial_stock_float / recipe_yield) if recipe_yield and initial_stock_float > 0 else 0.0
+
                 for item_data in recipe_data:
                     ingredient = item_data.get('ingredient')
-                    quantity_per_unit = item_data.get('quantity')
+                    quantity_per_lot = item_data.get('quantity')
+                    unit = item_data.get('unit') or ''
 
-                    if not ingredient or not quantity_per_unit or quantity_per_unit <= 0:
+                    if not ingredient or not quantity_per_lot or quantity_per_lot <= 0:
                         continue
 
-                    total_ingredient_needed = quantity_per_unit * initial_stock
-                    
+                    # Cantidad exacta requerida (SIN pérdidas automáticas)
+                    required_to_deduct = float(quantity_per_lot) * float(multiplier)
+
+                    # Para unidades indivisibles, redondear hacia arriba
+                    if str(unit).lower() in ['unidades', 'unidad', 'u', 'uds']:
+                        required_to_deduct = float(math.ceil(required_to_deduct))
+
                     # Lock ingredient for update and deduct stock
                     ingredient_to_update = Product.objects.select_for_update().get(pk=ingredient.pk)
 
-                    if ingredient_to_update.stock < total_ingredient_needed:
+                    if float(ingredient_to_update.stock) < required_to_deduct:
                         raise serializers.ValidationError(
                             f"No hay suficiente stock para el insumo '{ingredient.name}'. "
-                            f"Necesario: {total_ingredient_needed}, Disponible: {ingredient_to_update.stock}"
+                            f"Necesario: {required_to_deduct:.2f}, "
+                            f"Disponible: {ingredient_to_update.stock}"
                         )
-                    
-                    ingredient_to_update.stock -= total_ingredient_needed
+
+                    ingredient_to_update.stock = float(ingredient_to_update.stock) - required_to_deduct
                     ingredient_to_update.save()
 
         return product
 
     def update(self, instance, validated_data):
         recipe_data = validated_data.pop('recipe_ingredients', None)
-        instance = super().update(instance, validated_data)
-
+        
+        # Actualizar cada campo manualmente para asegurar que se guarde
+        instance.name = validated_data.get('name', instance.name)
+        instance.price = validated_data.get('price', instance.price)
+        instance.category = validated_data.get('category', instance.category)
+        instance.stock = validated_data.get('stock', instance.stock)
+        instance.description = validated_data.get('description', instance.description)
+        instance.low_stock_threshold = validated_data.get('low_stock_threshold', instance.low_stock_threshold)
+        instance.high_stock_multiplier = validated_data.get('high_stock_multiplier', instance.high_stock_multiplier)
+        instance.recipe_yield = validated_data.get('recipe_yield', instance.recipe_yield)
+        instance.loss_rate = validated_data.get('loss_rate', instance.loss_rate)
+        instance.is_ingredient = validated_data.get('is_ingredient', instance.is_ingredient)
+        instance.unit = validated_data.get('unit', instance.unit)
+        
+        instance.save()
+        
+        # Solo procesar ingredientes si se enviaron explícitamente
         if recipe_data is not None:
-            # Clear existing recipe and create new one
-            instance.recipe.all().delete()
+            # Si se envían ingredientes nuevos, agregarlos sin borrar los existentes
             for recipe_item_data in recipe_data:
                 RecipeIngredient.objects.create(product=instance, **recipe_item_data)
         
@@ -333,8 +422,8 @@ class OrderSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Order
-        fields = ('id', 'customer_name', 'date', 'payment_method', 'items', 'total_amount', 'notes', 'status', 'created_at', 'user')
-        read_only_fields = ('id', 'created_at', 'user')
+        fields = ('id', 'customer_name', 'fecha_para_la_que_se_quiere_el_pedido', 'payment_method', 'items', 'total_amount', 'notes', 'status', 'fecha_de_orden_del_pedido', 'user')
+        read_only_fields = ('id', 'fecha_de_orden_del_pedido', 'user')
 
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])
@@ -361,11 +450,121 @@ class InventoryChangeAuditSerializer(serializers.ModelSerializer):
         fields = ('id', 'inventory_change', 'product', 'product_name', 'user', 'role', 'change_type', 'quantity', 'previous_stock', 'new_stock', 'reason', 'timestamp')
         read_only_fields = ('id', 'inventory_change', 'product_name', 'user', 'previous_stock', 'new_stock', 'timestamp')
 
+# Serializer para registros de pérdidas
+class LossRecordSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source='product.name', read_only=True)
+    user_name = serializers.CharField(source='user.username', read_only=True)
+    category_display = serializers.CharField(source='get_category_display', read_only=True)
+
+    class Meta:
+        model = LossRecord
+        fields = ['id', 'product', 'product_name', 'quantity', 'category', 'category_display', 'description', 'cost_estimate', 'timestamp', 'user', 'user_name']
+        read_only_fields = ['id', 'timestamp', 'user', 'cost_estimate']
+
+    def validate(self, data):
+        product = data.get('product')
+        category = data.get('category')
+        
+        if product and category:
+            try:
+                from .models import Product
+                if product.category == 'Insumo':
+                    valid_categories = ['empaque_danado', 'sobreuso_receta', 'vencimiento', 'cadena_frio']
+                else:
+                    valid_categories = ['accidente_fisico', 'contaminacion', 'vencimiento', 'cadena_frio']
+                
+                if category not in valid_categories:
+                    raise serializers.ValidationError(f'Categoría inválida para este tipo de producto')
+            except Exception as e:
+                raise serializers.ValidationError(f'Error validando producto: {str(e)}')
+        
+        return data
+
+    def create(self, validated_data):
+        from django.db import transaction
+        
+        # Calcular costo estimado automáticamente
+        product = validated_data['product']
+        quantity_input = float(validated_data['quantity'])  # Cantidad ingresada por el usuario
+        
+        # Convertir la cantidad según la unidad del producto
+        if product.unit == 'g':  # Si el producto está en gramos
+            # El usuario ingresó en kilos, convertir a gramos para descontar del stock
+            quantity_to_subtract = quantity_input * 1000  # 1 kg = 1000 g
+            unit_display = f"{quantity_input} kg"
+        elif product.unit == 'ml':  # Si el producto está en mililitros
+            # El usuario ingresó en litros, convertir a mililitros para descontar del stock
+            quantity_to_subtract = quantity_input * 1000  # 1 l = 1000 ml
+            unit_display = f"{quantity_input} l"
+        else:  # Para unidades
+            quantity_to_subtract = quantity_input
+            unit_display = f"{quantity_input} unidades"
+        
+        # El costo se calcula basado en la cantidad ingresada por el usuario (no la convertida)
+        # porque el precio está en las unidades que ve el usuario (kg/litros/unidades)
+        validated_data['cost_estimate'] = float(product.price) * quantity_input
+        
+        with transaction.atomic():
+            # Crear registro de pérdida
+            loss_record = super().create(validated_data)
+            
+            # Actualizar stock del producto (restar la cantidad convertida)
+            product.stock = float(product.stock) - quantity_to_subtract
+            if product.stock < 0:
+                product.stock = 0
+            product.save()
+            
+            # Crear registro en InventoryChange para auditoría
+            from .models import InventoryChange
+            InventoryChange.objects.create(
+                product=product,
+                type='Salida',
+                quantity=quantity_to_subtract,  # Registrar la cantidad real descontada
+                reason=f'Pérdida: {loss_record.get_category_display()} ({unit_display}) - {loss_record.description or "Sin descripción"}',
+                user=validated_data.get('user')
+            )
+            
+        return loss_record
+
+# Serializers para producción
+class ProductionItemSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source='product.name', read_only=True)
+
+    class Meta:
+        model = __import__('api.models', fromlist=['ProductionItem']).ProductionItem
+        fields = ['id', 'product', 'product_name', 'quantity']
+        read_only_fields = ['id', 'product_name']
+
+class ProductionSerializer(serializers.ModelSerializer):
+    user = serializers.ReadOnlyField(source='user.username')
+    items = ProductionItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = __import__('api.models', fromlist=['Production']).Production
+        fields = ['id', 'user', 'created_at', 'total_units', 'items']
+        read_only_fields = ['id', 'user', 'created_at', 'total_units', 'items']
+
 class LowStockReportSerializer(serializers.ModelSerializer):
     reported_by = serializers.ReadOnlyField(source='reported_by.username')
-    product_name = serializers.ReadOnlyField(source='product.name')
+    product_ids = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Product.objects.all(),
+        source='products',
+        write_only=True
+    )
+    products_detail = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = LowStockReport
-        fields = ('id', 'product', 'product_name', 'message', 'reported_by', 'created_at', 'is_resolved')
-        read_only_fields = ('id', 'reported_by', 'created_at')
+        fields = ('id', 'product_ids', 'products_detail', 'message', 'reported_by', 'created_at', 'is_resolved')
+        read_only_fields = ('id', 'reported_by', 'created_at', 'products_detail')
+
+    def get_products_detail(self, obj):
+        products = obj.products.all()
+        return [{'id': p.id, 'name': p.name, 'category': p.category} for p in products]
+
+    def create(self, validated_data):
+        products = validated_data.pop('products', [])
+        report = LowStockReport.objects.create(**validated_data)
+        report.products.set(products)
+        return report

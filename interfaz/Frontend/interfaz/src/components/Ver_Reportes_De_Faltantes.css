@@ -1,0 +1,285 @@
+/* Contenedor principal */
+.ver-reportes-container {
+    padding: 20px;
+    max-width: 100%;
+    margin: 0 auto;
+}
+
+.ver-reportes-title {
+    font-size: 28px;
+    font-weight: 700;
+    color: #333;
+    margin-bottom: 30px;
+    text-align: center;
+}
+
+/* Mensajes de estado */
+.loading-message,
+.no-reports-message {
+    text-align: center;
+    padding: 40px 20px;
+    font-size: 18px;
+    color: #666;
+}
+
+.error-message-report {
+    background-color: #fee;
+    border: 1px solid #fcc;
+    color: #c33;
+    padding: 15px;
+    border-radius: 8px;
+    text-align: center;
+    margin: 20px 0;
+}
+
+/* Grid de tarjetas responsivo */
+.reports-grid {
+    display: grid;
+    gap: 20px;
+    margin-top: 20px;
+}
+
+/* Diseño responsivo de columnas */
+/* Móviles pequeños - 1 columna */
+@media (max-width: 639px) {
+    .reports-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Tablets y móviles grandes - 2 columnas */
+@media (min-width: 640px) and (max-width: 1023px) {
+    .reports-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* Tablets grandes y laptops pequeñas - 3 columnas */
+@media (min-width: 1024px) and (max-width: 1439px) {
+    .reports-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+/* Laptops y monitores medianos - 4 columnas */
+@media (min-width: 1440px) and (max-width: 1919px) {
+    .reports-grid {
+        grid-template-columns: repeat(4, 1fr);
+    }
+}
+
+/* Monitores grandes - 5 columnas */
+@media (min-width: 1920px) and (max-width: 2559px) {
+    .reports-grid {
+        grid-template-columns: repeat(5, 1fr);
+    }
+}
+
+/* Monitores ultra anchos - 6 columnas */
+@media (min-width: 2560px) {
+    .reports-grid {
+        grid-template-columns: repeat(6, 1fr);
+    }
+}
+
+/* Tarjeta de reporte */
+.report-card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s ease;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    border: 2px solid transparent;
+}
+
+.report-card:hover {
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+    transform: translateY(-2px);
+}
+
+.report-card.pending {
+    border-color: #ffc107;
+}
+
+.report-card.resolved {
+    border-color: #28a745;
+    opacity: 0.85;
+}
+
+/* Header de la tarjeta */
+.report-card-header {
+    padding: 15px;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-bottom: 1px solid #dee2e6;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.report-status-badge {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.badge-pending {
+    background-color: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffc107;
+}
+
+.badge-resolved {
+    background-color: #d4edda;
+    color: #155724;
+    border: 1px solid #28a745;
+}
+
+/* Cuerpo de la tarjeta */
+.report-card-body {
+    padding: 20px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.report-products {
+    font-size: 16px;
+    font-weight: 600;
+    color: #2c3e50;
+    line-height: 1.6;
+    padding: 10px;
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    border-left: 4px solid #007bff;
+}
+
+.report-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 14px;
+    color: #6c757d;
+}
+
+.report-meta-item {
+    display: flex;
+    flex-direction: column;
+}
+
+.report-meta-item strong {
+    color: #495057;
+    margin-bottom: 2px;
+}
+
+.report-message {
+    background-color: #f1f3f5;
+    padding: 12px;
+    border-radius: 8px;
+    font-size: 14px;
+}
+
+.report-message strong {
+    display: block;
+    margin-bottom: 8px;
+    color: #495057;
+}
+
+.report-message p {
+    margin: 0;
+    color: #6c757d;
+    line-height: 1.5;
+    word-wrap: break-word;
+}
+
+/* Footer de la tarjeta */
+.report-card-footer {
+    padding: 15px;
+    background-color: #f8f9fa;
+    border-top: 1px solid #dee2e6;
+}
+
+.btn-resolve {
+    width: 100%;
+    padding: 10px 16px;
+    background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.btn-resolve:hover {
+    background: linear-gradient(135deg, #218838 0%, #1aa179 100%);
+    box-shadow: 0 4px 12px rgba(40, 167, 69, 0.3);
+    transform: translateY(-1px);
+}
+
+.btn-resolve:active {
+    transform: translateY(0);
+}
+
+/* Ajustes para móviles muy pequeños */
+@media (max-width: 400px) {
+    .ver-reportes-container {
+        padding: 15px;
+    }
+    
+    .ver-reportes-title {
+        font-size: 24px;
+        margin-bottom: 20px;
+    }
+    
+    .report-card-body {
+        padding: 15px;
+    }
+    
+    .report-products {
+        font-size: 14px;
+    }
+}
+
+/* Estilos responsivos para management-container y form-container */
+
+/* Celulares - hasta 639px */
+@media (max-width: 639px) {
+    .management-container {
+        padding: 5px;
+    }
+    
+    .form-container {
+        padding: 10px;
+    }
+}
+
+/* Tablets y pantallas medianas - 640px hasta 1253px */
+@media (min-width: 640px) and (max-width: 1253px) {
+    .management-container {
+        padding: 10px;
+    }
+    
+    .form-container {
+        padding: 15px;
+    }
+}
+
+/* Pantallas grandes - 1254px en adelante */
+@media (min-width: 1254px) {
+    .management-container {
+        padding: 15px;
+    }
+    
+    .form-container {
+        padding: 20px;
+    }
+}

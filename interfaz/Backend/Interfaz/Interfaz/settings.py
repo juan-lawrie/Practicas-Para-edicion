@@ -102,6 +102,7 @@ INSTALLED_APPS = [
     'rest_framework',  # DRF
     'rest_framework_simplejwt',  # Agregar esta línea
     'api',  # Tu aplicación principal
+    'rest_framework_simplejwt.token_blacklist'
 ]
 AUTH_USER_MODEL = 'api.User' 
 
